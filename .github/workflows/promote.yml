@@ -1,0 +1,28 @@
+name: Promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [test, prod]
+        required: true
+      source_run_id:
+        description: Successful Release run for test; successful Promote-to-test run for prod
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/deploy.yml
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    with:
+      target_environment: ${{ inputs.environment }}
+      source_run_id: ${{ inputs.source_run_id }}

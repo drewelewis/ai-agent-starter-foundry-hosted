@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.*
+.env.local
+.env.*.local
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docker
+dockerfile
+docker-compose.yaml
+.dockerignore
+
+# Documentation
+README.md
+docs/
+*.md
+
+# Tests
+tests/
+test_*.py
+*_test.py
+requirements-dev.txt
+
+# CI/CD
+.github/
+scripts/
+infra/
+release-output/
+release-input/
+.azure/
+.foundry/
+
+# Batch files
+*.bat
+
+# Logs
+*.log
+.agentserver/
+
+# OS
+.DS_Store
+Thumbs.db

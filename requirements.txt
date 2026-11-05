@@ -1,0 +1,15 @@
+# Current Agent Framework and Foundry Responses protocol 2.0 hosting stack.
+agent-framework-core==1.23.0
+agent-framework-openai==1.17.0
+agent-framework-foundry-hosting==1.0.0b261022
+azure-ai-agentserver-core==2.2.0
+azure-ai-agentserver-responses==2.3.0
+
+# Local Responses chat client.
+httpx
+# Same-server documentation routes.
+starlette
+
+# Model authentication and local environment loading.
+azure-identity
+python-dotenv
