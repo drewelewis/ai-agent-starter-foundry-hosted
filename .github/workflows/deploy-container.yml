@@ -1,3 +1,9 @@
+# Purpose: Provide one deployment entry point for dev, test, and prod.
+# Runs automatically for dev after a successful current-main container build,
+# or manually with an environment and source_run_id. The source is a successful
+# build for dev, dev deployment for test, or test deployment for prod.
+# Calls deploy-and-verify-foundry-agent.yml; never builds an image itself.
+
 name: Deploy Container
 
 on:
