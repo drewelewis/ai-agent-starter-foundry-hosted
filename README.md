@@ -260,11 +260,21 @@ in [operations/](operations/), typed wrappers in [tools/](tools/), and register
 tools in [tools/catalog.py](tools/catalog.py). Add regression tests, then test
 the change through the server and chat client.
 
-Open a pull request; after review and merge, the configured Release workflow
-builds the image and deploys dev. Test and prod are explicit promotions of that
+Use a short-lived `feature/<description>` or `fix/<description>` branch and
+open a pull request into `main`. After review and merge, **Build Image and
+Deploy to Dev** builds the image and deploys dev. Test and prod use **Deploy
+Tested Image to Test or Prod** with the same image, not new builds.
+Protect `main` with required checks and block direct/force pushes; GitHub
+Environment approvals govern cloud deployment rather than environment branches.
+Test and prod are explicit promotions of that
 same image, not workstation `azd up` commands. Follow the
 [feature release runbook](ci-cd.md#6-implement-a-feature-local---dev---test---prod)
 for exact triggers, test gates, run-ID inputs, and rollback.
+
+The container uses a digest-pinned Python base and a hash-verified Python 3.11
+Linux dependency lock. Application-only copies exclude local configuration and
+deployment artifacts. See [dependency updates](ci-cd.md#dependency-and-base-image-updates)
+for regenerating locks and reviewing base/action updates.
 
 ## Microsoft Foundry hosted agent
 

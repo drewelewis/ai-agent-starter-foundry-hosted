@@ -144,6 +144,22 @@ def test_container_check_retries_cold_start_disconnect(monkeypatch):
     assert open_url.call_count == 3
 
 
+def test_container_image_checks_are_isolated_and_fail_explicitly(monkeypatch):
+    execute = Mock(return_value="image verified")
+    monkeypatch.setattr(container_smoke, "command", execute)
+    container_smoke.check_image("registry.azurecr.io/math-tutor@sha256:" + "a" * 64)
+    args = execute.call_args.args
+    assert args[:8] == (
+        "docker", "run", "--rm", "--network", "none", "--entrypoint", "python",
+        "registry.azurecr.io/math-tutor@sha256:" + "a" * 64,
+    )
+    assert "actual == expected" in args[-1]
+    assert "os.getuid() != 0" in args[-1]
+    execute.side_effect = RuntimeError("image contents check failed")
+    with pytest.raises(RuntimeError, match="image contents check failed"):
+        container_smoke.check_image("math-tutor:ci")
+
+
 def test_candidate_test_precedes_endpoint_switch(release, orchestration, tmp_path):
     client = orchestration
     tested_versions = []
@@ -584,7 +600,7 @@ def test_azd_hosted_deployment_contract():
     assert (ROOT / service["docker"]["path"]).is_file()
     dockerfile = (ROOT / service["docker"]["path"]).read_text()
     assert "--mount=" not in dockerfile
-    assert "RUN pip install --no-cache-dir -r requirements.txt" in dockerfile
+    assert "RUN pip install --no-cache-dir --require-hashes -r requirements.lock.txt" in dockerfile
     assert service["container"]["resources"] == {"cpu": "1", "memory": "2Gi"}
     assert service["protocols"] == [{"protocol": "responses", "version": "2.0.0"}]
     assert service["env"] == {
@@ -723,6 +739,90 @@ def test_release_wires_infrastructure_before_build_and_deployment():
     assert len(restore) == 1
     assert restore[0]["if"] == "inputs.environment == 'dev'"
     assert '--name infrastructure-dev' in restore[0]["run"]
+
+
+def test_runtime_image_uses_pinned_base_and_explicit_application_copies():
+    import re
+
+    dockerfile = (ROOT / "dockerfile").read_text()
+    assert re.search(r"^FROM python:3\.11-slim@sha256:[a-f0-9]{64}$", dockerfile, re.MULTILINE)
+    assert "COPY . ." not in dockerfile
+    copies = [line for line in dockerfile.splitlines() if line.startswith("COPY ")]
+    assert copies == [
+        "COPY requirements.lock.txt .",
+        "COPY --chown=appuser:appuser main.py server_docs.py ./",
+        "COPY --chown=appuser:appuser agents/ ./agents/",
+        "COPY --chown=appuser:appuser operations/ ./operations/",
+        "COPY --chown=appuser:appuser tools/ ./tools/",
+    ]
+    assert "USER appuser" in dockerfile
+    assert "apt-get" not in dockerfile
+    ignored = (ROOT / ".dockerignore").read_text().splitlines()
+    assert "infrastructure-input/" in ignored
+    assert "requirements-dev.lock.txt" in ignored
+
+
+def test_workflow_names_describe_their_actions_without_changing_provenance_paths():
+    names = {
+        "ci.yml": "Check Code and Container",
+        "infrastructure.yml": "Create or Update Azure Resources",
+        "release.yml": "Build Image and Deploy to Dev",
+        "deploy.yml": "Deploy and Verify Foundry Agent (Reusable)",
+        "promote.yml": "Deploy Tested Image to Test or Prod",
+        "rollback.yml": "Restore Previous Agent Version",
+    }
+    for filename, name in names.items():
+        workflow = yaml.load((ROOT / ".github/workflows" / filename).read_text(), Loader=yaml.BaseLoader)
+        assert workflow["name"] == name
+        assert all(job.get("name") for job in workflow["jobs"].values())
+    for filename in ("ci.yml", "release.yml"):
+        text = (ROOT / ".github/workflows" / filename).read_text()
+        assert "python -m scripts.container_smoke --image " in text
+    release = (ROOT / ".github/workflows/release.yml").read_text()
+    assert "provenance: false" in release
+    assert "sbom: false" in release
+
+
+def test_dependency_locks_have_exact_versions_and_hashes():
+    import re
+    from packaging.requirements import Requirement
+
+    locks = {}
+    for filename in ("requirements.lock.txt", "requirements-dev.lock.txt"):
+        entries = {}
+        text = (ROOT / filename).read_text().replace("\\\n", "")
+        for line in text.splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            parts = re.split(r"\s+--hash=", line.strip())
+            requirement = Requirement(parts[0])
+            assert len(requirement.specifier) == 1
+            assert next(iter(requirement.specifier)).operator == "=="
+            assert len(parts) > 1
+            assert all(re.fullmatch(r"sha256:[a-f0-9]{64}", part.strip()) for part in parts[1:])
+            entries[requirement.name] = requirement
+        assert entries
+        locks[filename] = entries
+    runtime = locks["requirements.lock.txt"]
+    development = locks["requirements-dev.lock.txt"]
+    for name, requirement in runtime.items():
+        assert development[name].specifier == requirement.specifier
+    for line in (ROOT / "requirements.txt").read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            requirement = Requirement(line)
+            version = next(iter(runtime[requirement.name].specifier)).version
+            assert requirement.specifier.contains(version, prereleases=True)
+
+
+def test_ci_requires_committed_hash_locks_and_reviewed_base_updates():
+    ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    assert "pip install --require-hashes -r requirements-dev.lock.txt" in ci
+    assert "git ls-files --error-unmatch requirements.lock.txt requirements-dev.lock.txt" in ci
+    assert "git diff --exit-code -- requirements.lock.txt requirements-dev.lock.txt" in ci
+    updates = yaml.safe_load((ROOT / ".github/dependabot.yml").read_text())
+    assert updates["version"] == 2
+    assert {update["package-ecosystem"] for update in updates["updates"]} == {"docker", "github-actions"}
+    assert all(update["schedule"]["interval"] == "weekly" for update in updates["updates"])
 
 
 def re_full_action_pin(value):

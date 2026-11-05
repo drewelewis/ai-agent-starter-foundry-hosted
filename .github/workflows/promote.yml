@@ -1,4 +1,4 @@
-name: Promote
+name: Deploy Tested Image to Test or Prod
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
         options: [test, prod]
         required: true
       source_run_id:
-        description: Successful Release run for test; successful Promote-to-test run for prod
+        description: Successful dev deployment run for test; successful test deployment run for prod
         type: string
         required: true
 
@@ -17,6 +17,7 @@ permissions:
 
 jobs:
   promote:
+    name: Copy the Tested Image and Deploy the Target Agent
     if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/deploy.yml
     permissions:

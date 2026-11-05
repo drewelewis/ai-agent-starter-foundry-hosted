@@ -160,10 +160,51 @@ Record a release manifest containing commit, workflow run, digest, platform,
 scan/SBOM/provenance references, and the deployment-definition revision.
 Promotion consumes this record, not an arbitrary user-supplied image.
 
-Build once does not mean dependencies can remain unpatched. Update dependencies
-and base images deliberately, producing a new candidate and running the gates
-again. The current base image and some dependencies are not fully locked;
-pin the base digest and establish dependency locking as pipeline hardening.
+The image uses a digest-pinned Python base and installs
+[requirements.lock.txt](requirements.lock.txt) with pip's `--require-hashes`.
+The Dockerfile copies only the application entry point, documentation-route
+module, and agent/tool/operation packages. It does not copy deployment artifacts,
+tests, Git metadata, or `.env`. Container checks inspect the actual image's
+application directory and non-root user as well as probing readiness and
+malformed-input behavior. The readiness health check uses Python's standard
+library; no extra operating-system package installation is needed.
+
+### Dependency and base-image updates
+
+Build once does not mean dependencies remain unpatched. Two generated files
+pin the full Python dependency resolutions and permitted package hashes for
+**Python 3.11 on Linux x86_64**:
+
+- [requirements.lock.txt](requirements.lock.txt): runtime image.
+- [requirements-dev.lock.txt](requirements-dev.lock.txt): credential-free CI
+  tests, constrained to the same runtime versions.
+
+The existing requirements files remain the human-maintained inputs and local
+development entry points. Other local Python/platform combinations are not
+certified by these Linux locks. Use Docker or Linux Python 3.11 for release
+parity. CI regenerates both locks, rejects missing/stale committed files, and
+installs the test lock with hash verification; it never silently ships a newly
+resolved dependency set.
+
+Regenerate on a feature branch using uv 0.12.24 (with working PyPI access):
+
+```powershell
+uv pip compile requirements.txt --python-version 3.11 --python-platform x86_64-unknown-linux-gnu --generate-hashes --no-emit-index-url --no-emit-find-links --output-file requirements.lock.txt --quiet
+uv pip compile requirements-dev.txt --constraint requirements.lock.txt --python-version 3.11 --python-platform x86_64-unknown-linux-gnu --generate-hashes --no-emit-index-url --no-emit-find-links --output-file requirements-dev.lock.txt --quiet
+```
+
+For intentional dependency refreshes, review the input versions and add
+`--upgrade` to both commands, then run tests/container checks and commit both
+locks in the same PR. Upgrade Agent Framework and Foundry hosting as a
+compatible set. Review Python dependency refreshes at least monthly and when
+advisories or SDK compatibility changes require them.
+
+[Dependabot](.github/dependabot.yml) proposes weekly Docker base-image and
+GitHub Action updates. Review these PRs and let required checks run; do not
+auto-merge or rebuild images separately per environment. Base digest updates
+must preserve Python 3.11 until a deliberate runtime change is tested.
+Pinning inputs improves auditability; it does not claim bit-for-bit reproducible
+images or remove the need for vulnerability scanning.
 
 ### Foundry deployment
 
@@ -205,12 +246,17 @@ These workflows are implemented:
 
 | Workflow | Trigger | Responsibility |
 |---|---|---|
-| [ci.yml](.github/workflows/ci.yml) | Pull requests, main pushes, reusable call | Python 3.11 tests, dependency checks, actionlint, Bicep compilation, container startup checks; no Azure credentials on PRs |
-| [infrastructure.yml](.github/workflows/infrastructure.yml) | Reusable call; manual `plan` or `apply` | Validate/what-if and reconcile resources/model; publish configuration outputs |
-| [release.yml](.github/workflows/release.yml) | Main push or manual main run | Run CI, reconcile dev infrastructure, build/publish/scan one image, create manifest, deploy/test dev |
-| [promote.yml](.github/workflows/promote.yml) | Manual source run ID | Verify source-run provenance, copy by digest, deploy test or prod |
-| [deploy.yml](.github/workflows/deploy.yml) | Reusable workflow | Environment gates, runtime model role, candidate smoke, endpoint selection, evidence |
-| [rollback.yml](.github/workflows/rollback.yml) | Manual known-good run ID | Verify source-run provenance and restore a recorded version |
+| [Check Code and Container](.github/workflows/ci.yml) | Pull requests, main pushes, reusable call | Verify dependency locks, Python 3.11 tests, actionlint, Bicep compilation, image contents/non-root user and startup; no Azure credentials on PRs |
+| [Create or Update Azure Resources](.github/workflows/infrastructure.yml) | Reusable call; manual `plan` or `apply` | Validate/what-if and reconcile resources/model; publish configuration outputs |
+| [Build Image and Deploy to Dev](.github/workflows/release.yml) | Main push or manual main run | Run checks, reconcile dev infrastructure, build/publish/scan one image, create manifest, deploy/test dev |
+| [Deploy Tested Image to Test or Prod](.github/workflows/promote.yml) | Manual source run ID | Verify source-run provenance, copy by digest, deploy test or prod |
+| [Deploy and Verify Foundry Agent (Reusable)](.github/workflows/deploy.yml) | Reusable workflow | Environment gates, runtime model role, candidate smoke, endpoint selection, evidence |
+| [Restore Previous Agent Version](.github/workflows/rollback.yml) | Manual known-good run ID | Verify source-run provenance and restore a recorded version |
+
+These are the names shown in GitHub Actions. Workflow filenames and internal job
+IDs remain stable so CLI commands, artifact provenance checks, and existing
+workflow references continue to work. Review required status checks in branch
+protection after adopting the clearer job display names.
 
 Share deployment logic through a reusable workflow so dev/test/prod execute
 the same steps. Dev infrastructure, image build, and Foundry deployment are
@@ -223,6 +269,16 @@ restrictions, production reviewers, and prevention of self-approval where
 available under the repository's GitHub plan. Protect workflow/IaC changes with
 required reviews and CODEOWNERS. Use a protected main branch and short-lived
 feature branches rather than long-running branches for every environment.
+Branch from current `main` using `feature/<description>` or `fix/<description>`,
+open a PR, pass required checks, and squash-merge after review. Delete the
+branch after merge. Do not push implementation work directly to `main`.
+Dev/test/prod are deployment destinations for identified image digests, not
+branches to merge between.
+
+If production needs an urgent fix while main contains unreleased changes,
+branch from the production commit and plan an explicitly supported hotfix
+release path. The current main-only workflows do not implement that exception;
+do not bypass provenance checks to ship it.
 
 Serialize deployment per environment/agent with a concurrency group. Do not
 cancel a production deployment mid-rollout because another commit arrived.
@@ -375,7 +431,7 @@ git push -u origin feature/your-feature
 gh pr create --base main --title 'Describe your feature' --body 'Describe the change and test evidence.'
 ```
 
-[CI](.github/workflows/ci.yml) runs offline Python tests, `pip check`,
+[Check Code and Container](.github/workflows/ci.yml) runs offline Python tests, `pip check`,
 actionlint, resource-group and azd Bicep/environment-parameter compilation, and Linux
 container startup/readiness/malformed-input checks. It does not publish to ACR
 or make live model calls. Azure credentials are not supplied to PR jobs.
@@ -384,7 +440,7 @@ do not enforce review or merge policy.
 
 ### C. Merge and deploy dev
 
-Merge the reviewed PR after CI succeeds. [Release](.github/workflows/release.yml)
+Merge the reviewed PR after checks succeed. [Build Image and Deploy to Dev](.github/workflows/release.yml)
 automatically runs on a main push; it can also be started manually on main.
 It:
 
@@ -436,7 +492,7 @@ gh workflow run promote.yml --ref main -f environment=test -f source_run_id='<su
 gh run list --workflow promote.yml --branch main --limit 5
 ```
 
-[Promote](.github/workflows/promote.yml) verifies the source run's repository,
+[Deploy Tested Image to Test or Prod](.github/workflows/promote.yml) verifies the source run's repository,
 workflow, branch/event, successful result, and deployment record. It imports
 the exact digest from dev ACR into test ACR, verifies/locks it without rebuilding,
 and deploys with **test's** endpoint/model settings and permissions. Candidate
@@ -482,7 +538,7 @@ target environment**:
 gh workflow run rollback.yml --ref main -f environment=prod -f known_good_run_id='<earlier-successful-prod-run-id>'
 ```
 
-[Rollback](.github/workflows/rollback.yml) verifies the recorded version,
+[Restore Previous Agent Version](.github/workflows/rollback.yml) verifies the recorded version,
 restores its endpoint selection, runs smoke, and writes rollback evidence.
 It does not rebuild or revert model/infrastructure changes. Existing sessions
 can remain attached to their original versions. Artifacts and old versions
@@ -661,19 +717,19 @@ selected Bicep parameter file; otherwise resource-name parameters are preserved.
 
 1. Complete dev OIDC/role/environment bootstrap and review IaC/model settings.
    An optional manual `plan` can preview an existing group's changes.
-   Run **Release** on main; it applies dev infrastructure before building.
+   Run **Build Image and Deploy to Dev** on main; it applies dev infrastructure before building.
    Approval happens before protected jobs, not between their what-if and apply.
 2. Review all jobs and artifacts. A failed
    candidate remains recorded but is never eligible for promotion. Existing
    endpoint selection is preserved until candidate tests pass; failed endpoint
    smoke restores the prior selection when one exists.
-3. Provision test the same way. Run **Promote**, selecting `test` and the
+3. Provision test the same way. Run **Deploy Tested Image to Test or Prod**, selecting `test` and the
    successful Release run's numeric ID. No arbitrary image input is accepted.
 4. After test qualification and production commissioning, provision prod and
-   run **Promote** with the successful Promote-to-test run's ID. The adapter
+   run **Deploy Tested Image to Test or Prod** with the successful test deployment run's ID. The adapter
    enforces dev -> test -> prod and verifies the source workflow, main branch,
    event, repository, successful conclusion, and deployment record.
-5. To roll back, run **Rollback** with the environment and an earlier successful
+5. To roll back, run **Restore Previous Agent Version** with the environment and an earlier successful
    deployment run ID for that environment. Keep that version/image retained.
    A failed rollback endpoint smoke attempts to restore its original selector.
 
@@ -692,7 +748,10 @@ their original versions after selection or rollback.
 - Promotion preserves the image manifest. Buildx embedded attestations are
   disabled to keep a single-platform image promotion contract; SBOM/scan and
   GitHub run evidence are stored as artifacts, not claimed as signed OCI
-  attestations. Add a verified signing policy before requiring signed images.
+  attestations. Docker recommends provenance/SBOM attestations; enabling them
+  remains gated on a real ACR copy/import and Foundry deployment test proving
+  image/metadata preservation. Do not simply flip the flags or label the
+  artifact-only evidence as cryptographically verified provenance.
 - Live smoke asserts completed Responses and strict numeric results for
   geometry/algebra in candidate-specific and endpoint-selected sessions.
   It does **not** prove tool execution from traces or implement a comprehensive
@@ -701,9 +760,10 @@ their original versions after selection or rollback.
 - Evidence artifacts are retained for 90 days (subject to repository policy).
   Promotion/rollback by run ID requires retained artifacts; export approved
   release records to durable storage for a longer operational window.
-- Pinned actions/scanner/actionlint are included. Hosted runner Azure CLI/Bicep,
-  the Python base image, and all transitive dependencies are not fully locked;
-  review tool/base updates before relying on reproducible rebuilds.
+- The Python base digest and full Linux Python dependency resolutions/hashes
+  are pinned. Actions/scanner/actionlint are also pinned. Hosted runner tooling
+  and Azure CLI/Bicep are not fully locked; this is not a claim of bit-for-bit
+  reproducible rebuilds. Keep inputs patched through reviewed updates.
 - Local PyPI connectivity can differ from GitHub runners. The shared Dockerfile
   uses public PyPI and avoids BuildKit-only secret mounts so remote ACR builds
   also work. A private feed needs a separately reviewed secure build setup;
@@ -716,6 +776,9 @@ their original versions after selection or rollback.
 
 ## Official references
 
+- [Docker build best practices](https://docs.docker.com/build/building/best-practices/)
+- [Docker image digests](https://docs.docker.com/dhi/explore/security-concepts/digests/)
+- [Docker provenance and SBOM attestations](https://docs.docker.com/build/ci/github-actions/attestations/)
 - [Foundry hosted-agent deployment lifecycle and requirements](https://learn.microsoft.com/azure/foundry/agents/how-to/deploy-hosted-agent)
 - [Microsoft's GitHub Actions/azd hosted-agent CI/CD quickstart](https://learn.microsoft.com/azure/foundry/agents/quickstarts/set-up-cicd-hosted-agent?pivots=azd)
 - [Manage Foundry versions and endpoint selection](https://learn.microsoft.com/azure/foundry/agents/how-to/manage-hosted-agent)
