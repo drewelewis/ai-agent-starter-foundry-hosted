@@ -425,7 +425,7 @@ def test_failed_response_is_not_a_success():
 def test_source_workflow_provenance_is_verified_before_download(monkeypatch, deployed, tmp_path):
     monkeypatch.setattr(delivery, "command", Mock(return_value=json.dumps({
         "conclusion": "success", "head_branch": "feature", "event": "pull_request",
-        "path": delivery.DEV_DEPLOY_WORKFLOW,
+        "path": delivery.DEPLOY_WORKFLOW,
         "repository": {"full_name": "example/math-tutor"},
     })))
     with pytest.raises(ValueError, match="approved successful"):
@@ -436,7 +436,7 @@ def test_source_workflow_provenance_is_verified_before_download(monkeypatch, dep
 def test_source_record_matches_github_commit_and_run(monkeypatch, deployed, tmp_path):
     source = {
         "conclusion": "success", "head_branch": "main", "head_sha": "c" * 40,
-        "event": "workflow_run", "path": delivery.DEV_DEPLOY_WORKFLOW,
+        "event": "workflow_run", "path": delivery.DEPLOY_WORKFLOW,
         "repository": {"full_name": "example/math-tutor"},
     }
     build = {**source, "path": delivery.BUILD_WORKFLOW, "head_sha": deployed["commit"]}
@@ -454,18 +454,14 @@ def test_source_record_matches_github_commit_and_run(monkeypatch, deployed, tmp_
         delivery.fetch_record("41", "dev", tmp_path / "deployment.json")
 
 
-@pytest.mark.parametrize(("environment", "workflow"), [
-    ("dev", "deploy-container-to-dev.yml"),
-    ("test", "deploy-tested-container-to-test-or-prod.yml"),
-    ("prod", "deploy-tested-container-to-test-or-prod.yml"),
-])
-def test_source_provenance_accepts_only_the_renamed_release_workflow(
-    monkeypatch, deployed, tmp_path, environment, workflow,
+@pytest.mark.parametrize("environment", ["dev", "test", "prod"])
+def test_source_provenance_accepts_only_the_unified_deployment_workflow(
+    monkeypatch, deployed, tmp_path, environment,
 ):
     record = {**deployed, "environment": environment}
     source = {
         "conclusion": "success", "head_branch": "main", "head_sha": record["commit"],
-        "event": "workflow_dispatch", "path": f".github/workflows/{workflow}",
+        "event": "workflow_dispatch", "path": delivery.DEPLOY_WORKFLOW,
         "repository": {"full_name": "example/math-tutor"},
     }
 
@@ -486,6 +482,46 @@ def test_source_provenance_accepts_only_the_renamed_release_workflow(
     with pytest.raises(ValueError, match="approved successful"):
         delivery.fetch_record("41", environment, tmp_path / "deployment.json")
     assert execute.call_count == 1
+
+
+@pytest.mark.parametrize("environment", ["test", "prod"])
+def test_automatic_workflow_runs_cannot_supply_non_dev_deployment_records(
+    monkeypatch, deployed, tmp_path, environment,
+):
+    execute = Mock(return_value=json.dumps({
+        "conclusion": "success", "head_branch": "main", "head_sha": deployed["commit"],
+        "event": "workflow_run", "path": delivery.DEPLOY_WORKFLOW,
+        "repository": {"full_name": "example/math-tutor"},
+    }))
+    monkeypatch.setattr(delivery, "command", execute)
+    with pytest.raises(ValueError, match="approved successful"):
+        delivery.fetch_record("41", environment, tmp_path / "deployment.json")
+    assert execute.call_count == 1
+
+
+@pytest.mark.parametrize(("requested", "actual"), [
+    ("dev", "test"), ("test", "dev"), ("prod", "test"),
+])
+def test_unified_workflow_rejects_a_record_for_another_environment(
+    monkeypatch, deployed, tmp_path, requested, actual,
+):
+    source = {
+        "conclusion": "success", "head_branch": "main", "head_sha": deployed["commit"],
+        "event": "workflow_dispatch", "path": delivery.DEPLOY_WORKFLOW,
+        "repository": {"full_name": "example/math-tutor"},
+    }
+
+    def command(*args):
+        if args[:2] == ("gh", "api"):
+            return json.dumps(source)
+        (tmp_path / "deployment.json").write_text(json.dumps({**deployed, "environment": actual}))
+        return ""
+
+    execute = Mock(side_effect=command)
+    monkeypatch.setattr(delivery, "command", execute)
+    with pytest.raises(ValueError, match="provenance does not match"):
+        delivery.fetch_record("41", requested, tmp_path / "deployment.json")
+    assert execute.call_count == 2
 
 
 @pytest.mark.parametrize(("key", "value"), [
@@ -865,7 +901,7 @@ def test_azd_runtime_rejects_mismatched_account(monkeypatch, azd_configuration):
 
 def test_workflow_safety_contracts():
     workflows = list((ROOT / ".github/workflows").glob("*.yml"))
-    assert len(workflows) == 7
+    assert len(workflows) == 6
     for path in workflows:
         workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
         assert "pull_request_target" not in workflow["on"]
@@ -877,8 +913,8 @@ def test_workflow_safety_contracts():
                 assert "${{ inputs." not in step.get("run", "")
             if job.get("permissions", {}).get("id-token") == "write":
                 assert "environment" in job or "uses" in job
-    promote = (ROOT / ".github/workflows/deploy-tested-container-to-test-or-prod.yml").read_text()
-    assert "docker/build-push-action" not in promote
+    entry = (ROOT / ".github/workflows/deploy-container.yml").read_text()
+    assert "docker/build-push-action" not in entry
     reusable = (ROOT / ".github/workflows/deploy-and-verify-foundry-agent.yml").read_text()
     assert "cancel-in-progress: false" in reusable
     assert "PRODUCTION_DEPLOYMENTS_ENABLED" in reusable
@@ -903,14 +939,17 @@ def test_infrastructure_build_and_dev_deployment_are_separate_workflows():
     push_step = next(i for i, step in enumerate(steps) if "docker push " in step.get("run", ""))
     assert test_step < push_step
     assert all("scripts.delivery deploy" not in step.get("run", "") for step in steps)
-    dev = workflow("deploy-container-to-dev.yml")
+    dev = workflow("deploy-container.yml")
     assert dev["on"]["workflow_run"]["workflows"] == ["Build, Test, and Publish Container"]
     assert dev["on"]["workflow_run"]["branches"] == ["main"]
-    assert dev["jobs"]["deploy-dev"]["uses"] == "./.github/workflows/deploy-and-verify-foundry-agent.yml"
-    assert "conclusion == 'success'" in dev["jobs"]["deploy-dev"]["if"]
-    assert "head_sha == github.sha" in dev["jobs"]["deploy-dev"]["if"]
-    assert dev["jobs"]["deploy-dev"]["with"]["source_run_id"] == (
-        "${{ github.event.workflow_run.id || inputs.build_run_id }}"
+    assert dev["on"]["workflow_dispatch"]["inputs"]["environment"]["options"] == ["dev", "test", "prod"]
+    assert dev["on"]["workflow_dispatch"]["inputs"]["source_run_id"]["required"] == "true"
+    assert dev["jobs"]["deploy"]["uses"] == "./.github/workflows/deploy-and-verify-foundry-agent.yml"
+    assert "conclusion == 'success'" in dev["jobs"]["deploy"]["if"]
+    assert "head_sha == github.sha" in dev["jobs"]["deploy"]["if"]
+    assert dev["jobs"]["deploy"]["with"]["target_environment"] == "${{ inputs.environment || 'dev' }}"
+    assert dev["jobs"]["deploy"]["with"]["source_run_id"] == (
+        "${{ github.event.workflow_run.id || inputs.source_run_id }}"
     )
     deploy = yaml.load(
         (ROOT / ".github/workflows/deploy-and-verify-foundry-agent.yml").read_text(),
@@ -962,9 +1001,8 @@ def test_workflow_names_and_filenames_describe_their_actions():
         "build-and-test-container.yml": "Build and Test Container",
         "create-azure-resources.yml": "Create or Update Azure Resources",
         "build-test-and-publish-container.yml": "Build, Test, and Publish Container",
-        "deploy-container-to-dev.yml": "Deploy Container to Dev",
+        "deploy-container.yml": "Deploy Container",
         "deploy-and-verify-foundry-agent.yml": "Deploy and Verify Foundry Agent (Reusable)",
-        "deploy-tested-container-to-test-or-prod.yml": "Deploy Tested Container to Test or Prod",
         "restore-agent-version.yml": "Restore Previous Agent Version",
     }
     assert {path.name for path in (ROOT / ".github/workflows").glob("*.yml")} == set(names)

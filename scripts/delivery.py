@@ -23,8 +23,7 @@ NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 TAG = re.compile(r"sha-[0-9a-f]{40}-run-[0-9]+-[0-9]+")
 MODEL_USER_ROLE = "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
 BUILD_WORKFLOW = ".github/workflows/build-test-and-publish-container.yml"
-DEV_DEPLOY_WORKFLOW = ".github/workflows/deploy-container-to-dev.yml"
-PROMOTE_WORKFLOW = ".github/workflows/deploy-tested-container-to-test-or-prod.yml"
+DEPLOY_WORKFLOW = ".github/workflows/deploy-container.yml"
 INFRASTRUCTURE_WORKFLOW = ".github/workflows/create-azure-resources.yml"
 
 
@@ -466,9 +465,8 @@ def fetch_build(run_id: str, output: Path) -> None:
 
 
 def fetch_record(run_id: str, environment: str, output: Path) -> None:
-    workflow = DEV_DEPLOY_WORKFLOW if environment == "dev" else PROMOTE_WORKFLOW
     events = ("workflow_run", "workflow_dispatch") if environment == "dev" else ("workflow_dispatch",)
-    approved_run(run_id, workflow, events)
+    approved_run(run_id, DEPLOY_WORKFLOW, events)
     repo = required("GITHUB_REPOSITORY")
     command("gh", "run", "download", run_id, "--repo", repo,
             "--name", f"deployment-{environment}", "--dir", str(output.parent))
