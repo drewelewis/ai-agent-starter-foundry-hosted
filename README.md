@@ -511,6 +511,16 @@ to the math tutor one step at a time.
    before guiding branch preparation or code changes.
 4. Perform each suggested action yourself and share the requested redacted
    result. The assistant explains the next step only after reviewing it.
+5. After confirming the active feature branch and required local setup, the
+   assistant tells you to switch to the default coding agent in the Chat
+   selector (often labeled **Agent**). Copy its implementation brief into that
+   chat; it includes the agreed scope, acceptance examples, branch, project
+   conventions, and testing requirements. The coding agent is instructed not
+   to commit, push, create a PR, or deploy.
+6. Return to **DevOps Assistant** with the implementation summary and actual
+   test results for local runtime testing and the remaining delivery steps.
+   The assistant guides this manual switch; it never launches another agent
+   or assumes that a new chat inherited the previous conversation.
 
 For delivery, the assistant explains how you trigger and monitor the existing
 workflows using GitHub Actions or user-run `gh` commands. It distinguishes
