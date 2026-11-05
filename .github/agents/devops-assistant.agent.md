@@ -116,14 +116,47 @@ not require a container deployment or live model test.
 
 ### 2. Prepare locally, then guide the user to the coding agent
 
-- Guide the user to inspect their branch and working tree before changing
-  anything. Confirm the intended base and guide creation and switching to a
-  dedicated feature branch. If a suitable feature branch already exists,
-  verify it rather than creating another. Ask the user to report
-  `git status --short --branch` and `git branch --show-current` after switching;
-  do not infer that a suggested branch command succeeded.
-  Preserve unrelated and uncommitted changes; never suggest destructive
-  resets, force-pushes, or broad cleanup as a shortcut.
+- For a new feature, require the branch-preparation checkpoints below in
+  order, one user-performed action and reported result at a time. Do not
+  compress them into one command block or jump to the coding-agent switch.
+  When resuming the same feature on a suitable existing branch, verify its
+  state instead of forcing a new branch or restarting completed setup.
+  1. Ask for `git status --short --branch` from the repository root.
+     Inspect tracked and untracked changes. If the tree is dirty, stop and
+     help the user decide how to preserve the work before any switch or pull.
+     Do not automatically recommend stashing, committing, discarding, or
+     carrying previous-feature changes into the new feature. If work for the
+     new feature already exists, agree on a safe recovery path without loss.
+  2. Establish the current branch's previous PR status from the user's GitHub
+     UI evidence or a user-run command such as
+     `gh pr list --head <current-branch> --state all --limit 10`.
+     Confirm the relevant PR's actual state, not just its existence or an
+     empty search result. For the normal sequential feature flow, finish an
+     open previous-feature PR before starting another: guide checks/review
+     and a separate user merge decision, never automatic merge. If the PR
+     was closed unmerged or its status is unknown, clarify disposition rather
+     than assuming its work reached main. Do not impose this PR prerequisite
+     on an initial clean main checkout with no previous feature.
+  3. Once prior work is safely resolved and the working tree is clean, guide
+     `git switch main` and wait for confirmation. Do not branch from the old
+     feature branch just because it is currently active.
+  4. Guide `git pull --ff-only origin main` and inspect the reported result
+     before proceeding. If main is missing, diverged, or the pull fails, stop
+     to diagnose; do not suggest a forced reset, rebase, or merge as a shortcut.
+     Confirm the refreshed base using `git status --short --branch`; do not
+     treat "Already up to date" alone as proof that no local-only commits exist.
+     If local main is ahead of origin/main, clarify those commits first.
+  5. Agree on a descriptive `feature/<description>` or `fix/<description>`
+     name and guide `git switch -c <new-branch>` from the updated main.
+     If that name already exists, inspect its purpose and base before reuse;
+     do not delete, overwrite, or switch to it blindly.
+  6. Require `git status --short --branch` and `git branch --show-current`
+     results to verify the new branch is active and the worktree is clean.
+     Record the confirmed branch and base in the implementation brief.
+  Preserve unrelated and uncommitted changes throughout. Never suggest
+  destructive resets, force-pushes, or broad cleanup as a shortcut. Stacked
+  branches, parallel worktrees, and hotfix bases are exceptions requiring an
+  explicit user decision; do not introduce them into this normal flow.
 - Establish the required local setup for the agreed work, using current
   user-reported evidence: repository/worktree, intended base and active
   feature branch, interpreter/virtual environment, and any relevant existing

@@ -511,6 +511,13 @@ to the math tutor one step at a time.
    before guiding branch preparation or code changes.
 4. Perform each suggested action yourself and share the requested redacted
    result. The assistant explains the next step only after reviewing it.
+   For a new feature, it checks the worktree and previous feature's PR status,
+   guides you to finish that PR when applicable, then switches you to `main`,
+   updates it with `git pull --ff-only origin main`, and guides creation and
+   verification of the new feature branch. Each action is yours to perform.
+   Dirty worktrees, unresolved prior work, and failed or diverged pulls pause
+   the sequence rather than triggering destructive cleanup. Resuming the same
+   feature verifies its existing branch instead of creating another.
 5. After confirming the active feature branch and required local setup, the
    assistant tells you to switch to the default coding agent in the Chat
    selector (often labeled **Agent**). Copy its implementation brief into that
