@@ -1,6 +1,9 @@
 name: Create or Update Azure Resources
+run-name: ${{ inputs.operation == 'plan' && 'Plan' || 'Apply' }} Azure Resources for ${{ inputs.environment || 'dev' }}
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       environment:
@@ -25,14 +28,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: infrastructure-${{ inputs.environment }}
+  group: infrastructure-${{ inputs.environment || 'dev' }}
   cancel-in-progress: false
 
 jobs:
+  checks:
+    name: Build and Test Container Before Azure Changes
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/build-and-test-container.yml
   infrastructure:
     name: Validate and Apply Azure Resource Configuration
+    needs: checks
     if: github.ref == 'refs/heads/main'
-    environment: ${{ inputs.environment }}
+    environment: ${{ inputs.environment || 'dev' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -52,8 +60,8 @@ jobs:
       MODEL_VERSION: ${{ vars.MODEL_VERSION }}
       MODEL_SKU: ${{ vars.MODEL_SKU }}
       MODEL_CAPACITY: ${{ vars.MODEL_CAPACITY }}
-      TARGET_ENVIRONMENT: ${{ inputs.environment }}
-      OPERATION: ${{ inputs.operation }}
+      TARGET_ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+      OPERATION: ${{ inputs.operation || 'apply' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Require deliberate environment setup
@@ -76,7 +84,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: infrastructure-${{ inputs.environment }}
+          name: infrastructure-${{ inputs.environment || 'dev' }}
           path: release-output/
           if-no-files-found: warn
           retention-days: 90

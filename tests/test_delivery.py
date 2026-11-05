@@ -35,6 +35,7 @@ def release(monkeypatch):
         "digest": "sha256:" + "a" * 64, "commit": "b" * 40, "build_run_id": "40",
         "github_repository": "example/math-tutor",
         "tag": "sha-" + "b" * 40 + "-run-40-1",
+        "infrastructure_run_id": "39",
     }
 
 
@@ -45,7 +46,7 @@ def deployed(release):
         "registry_resource_id": "/subscriptions/source/registries/dev",
         "project_endpoint": "https://example.services.ai.azure.com/api/projects/tutor",
         "agent": "math-tutor", "version": "1", "configuration": {"kind": "hosted"},
-        "workflow_run_id": "40",
+        "workflow_run_id": "41",
     }
 
 
@@ -424,7 +425,8 @@ def test_failed_response_is_not_a_success():
 def test_source_workflow_provenance_is_verified_before_download(monkeypatch, deployed, tmp_path):
     monkeypatch.setattr(delivery, "command", Mock(return_value=json.dumps({
         "conclusion": "success", "head_branch": "feature", "event": "pull_request",
-        "path": ".github/workflows/release-dev.yml", "repository": {"full_name": "example/math-tutor"},
+        "path": delivery.DEV_DEPLOY_WORKFLOW,
+        "repository": {"full_name": "example/math-tutor"},
     })))
     with pytest.raises(ValueError, match="approved successful"):
         delivery.fetch_record("40", "dev", tmp_path / "deployment.json")
@@ -433,28 +435,29 @@ def test_source_workflow_provenance_is_verified_before_download(monkeypatch, dep
 
 def test_source_record_matches_github_commit_and_run(monkeypatch, deployed, tmp_path):
     source = {
-        "conclusion": "success", "head_branch": "main", "head_sha": deployed["commit"],
-        "event": "push", "path": ".github/workflows/release-dev.yml",
+        "conclusion": "success", "head_branch": "main", "head_sha": "c" * 40,
+        "event": "workflow_run", "path": delivery.DEV_DEPLOY_WORKFLOW,
         "repository": {"full_name": "example/math-tutor"},
     }
+    build = {**source, "path": delivery.BUILD_WORKFLOW, "head_sha": deployed["commit"]}
 
     def command(*args):
         if args[:2] == ("gh", "api"):
-            return json.dumps(source)
+            return json.dumps(build if args[2].endswith("/40") else source)
         (tmp_path / "deployment.json").write_text(json.dumps(deployed))
         return ""
 
     monkeypatch.setattr(delivery, "command", command)
-    delivery.fetch_record("40", "dev", tmp_path / "deployment.json")
-    source["head_sha"] = "c" * 40
+    delivery.fetch_record("41", "dev", tmp_path / "deployment.json")
+    build["head_sha"] = "c" * 40
     with pytest.raises(ValueError, match="source build commit"):
-        delivery.fetch_record("40", "dev", tmp_path / "deployment.json")
+        delivery.fetch_record("41", "dev", tmp_path / "deployment.json")
 
 
 @pytest.mark.parametrize(("environment", "workflow"), [
-    ("dev", "release-dev.yml"),
-    ("test", "release-test-or-prod.yml"),
-    ("prod", "release-test-or-prod.yml"),
+    ("dev", "deploy-container-to-dev.yml"),
+    ("test", "deploy-tested-container-to-test-or-prod.yml"),
+    ("prod", "deploy-tested-container-to-test-or-prod.yml"),
 ])
 def test_source_provenance_accepts_only_the_renamed_release_workflow(
     monkeypatch, deployed, tmp_path, environment, workflow,
@@ -468,19 +471,156 @@ def test_source_provenance_accepts_only_the_renamed_release_workflow(
 
     def command(*args):
         if args[:2] == ("gh", "api"):
+            if args[2].endswith("/40"):
+                return json.dumps({**source, "path": delivery.BUILD_WORKFLOW})
             return json.dumps(source)
         (tmp_path / "deployment.json").write_text(json.dumps(record))
         return ""
 
     execute = Mock(side_effect=command)
     monkeypatch.setattr(delivery, "command", execute)
-    delivery.fetch_record("40", environment, tmp_path / "deployment.json")
-    assert execute.call_count == 2
+    delivery.fetch_record("41", environment, tmp_path / "deployment.json")
+    assert execute.call_count == 3
     execute.reset_mock()
-    source["path"] = ".github/workflows/build.yml"
+    source["path"] = ".github/workflows/build-and-test-container.yml"
     with pytest.raises(ValueError, match="approved successful"):
-        delivery.fetch_record("40", environment, tmp_path / "deployment.json")
+        delivery.fetch_record("41", environment, tmp_path / "deployment.json")
     assert execute.call_count == 1
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("conclusion", "failure"), ("head_branch", "feature"),
+    ("event", "pull_request"), ("path", ".github/workflows/build-and-test-container.yml"),
+    ("repository", {"full_name": "other/repo"}), ("head_sha", "main"),
+])
+def test_build_source_is_verified_before_any_artifact_download(monkeypatch, release, tmp_path, key, value):
+    source = {
+        "conclusion": "success", "head_branch": "main", "head_sha": release["commit"],
+        "event": "workflow_run", "path": delivery.BUILD_WORKFLOW,
+        "repository": {"full_name": "example/math-tutor"},
+    }
+    source[key] = value
+    execute = Mock(return_value=json.dumps(source))
+    monkeypatch.setattr(delivery, "command", execute)
+    with pytest.raises(ValueError):
+        delivery.fetch_build("40", tmp_path / "release.json")
+    assert execute.call_count == 1
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("commit", "c" * 40), ("build_run_id", "41"), ("infrastructure_run_id", ""),
+])
+def test_build_manifest_must_match_its_successful_run(monkeypatch, release, tmp_path, key, value):
+    source = {
+        "conclusion": "success", "head_branch": "main", "head_sha": release["commit"],
+        "event": "workflow_dispatch", "path": delivery.BUILD_WORKFLOW,
+        "repository": {"full_name": "example/math-tutor"},
+    }
+    record = {**release, key: value}
+    record["tag"] = f"sha-{record['commit']}-run-{record['build_run_id']}-1"
+
+    def command(*args):
+        if args[:2] == ("gh", "api"):
+            return json.dumps(source)
+        (tmp_path / "release.json").write_text(json.dumps(record))
+        return ""
+
+    execute = Mock(side_effect=command)
+    monkeypatch.setattr(delivery, "command", execute)
+    with pytest.raises(ValueError):
+        delivery.fetch_build("40", tmp_path / "release.json")
+    assert execute.call_count == 2
+
+
+def test_verified_build_downloads_configuration_from_that_exact_build(monkeypatch, release, tmp_path):
+    source = {
+        "conclusion": "success", "head_branch": "main", "head_sha": release["commit"],
+        "event": "workflow_run", "path": delivery.BUILD_WORKFLOW,
+        "repository": {"full_name": "example/math-tutor"},
+    }
+
+    def command(*args):
+        if args[:2] == ("gh", "api"):
+            return json.dumps(source)
+        if "release" in args:
+            (tmp_path / "release.json").write_text(json.dumps(release))
+        return ""
+
+    execute = Mock(side_effect=command)
+    monkeypatch.setattr(delivery, "command", execute)
+    delivery.fetch_build("40", tmp_path / "release.json")
+    assert execute.call_count == 3
+    assert execute.call_args.args == (
+        "gh", "run", "download", "40", "--repo", "example/math-tutor",
+        "--name", "infrastructure-dev", "--dir", "infrastructure-input",
+    )
+
+
+@pytest.mark.parametrize(("commit", "title"), [
+    ("c" * 40, "Apply Azure Resources for dev"),
+    ("b" * 40, "Plan Azure Resources for dev"),
+    ("b" * 40, "Apply Azure Resources for prod"),
+])
+def test_build_rejects_stale_or_non_dev_infrastructure(monkeypatch, release, tmp_path, commit, title):
+    monkeypatch.setenv("GITHUB_SHA", release["commit"])
+    execute = Mock(return_value=json.dumps({
+        "conclusion": "success", "head_branch": "main", "head_sha": commit,
+        "event": "workflow_dispatch", "path": delivery.INFRASTRUCTURE_WORKFLOW,
+        "repository": {"full_name": "example/math-tutor"}, "display_title": title,
+    }))
+    monkeypatch.setattr(delivery, "command", execute)
+    with pytest.raises(ValueError, match="dev apply for the current main commit"):
+        delivery.fetch_infrastructure("39", tmp_path)
+    assert execute.call_count == 1
+
+
+def test_build_requires_applied_infrastructure_outputs(monkeypatch, release, tmp_path):
+    monkeypatch.setenv("GITHUB_SHA", release["commit"])
+    source = {
+        "conclusion": "success", "head_branch": "main", "head_sha": release["commit"],
+        "event": "push", "path": delivery.INFRASTRUCTURE_WORKFLOW,
+        "repository": {"full_name": "example/math-tutor"}, "display_title": "Apply Azure Resources for dev",
+    }
+    monkeypatch.setattr(delivery, "command", Mock(return_value=json.dumps(source)))
+    with pytest.raises(ValueError, match="did not publish applied configuration"):
+        delivery.fetch_infrastructure("39", tmp_path)
+    (tmp_path / "infrastructure.json").write_text("{}")
+    delivery.fetch_infrastructure("39", tmp_path)
+
+
+def test_direct_dev_deployment_rejects_another_build_registry(monkeypatch, release, tmp_path):
+    path = tmp_path / "release.json"
+    path.write_text(json.dumps({**release, "registry_resource_id": "/other/acr"}))
+    monkeypatch.setenv("AZURE_CONTAINER_REGISTRY_ID", "/dev/acr")
+    monkeypatch.setattr(delivery.sys, "argv", ["delivery", "deploy", "--input", str(path)])
+    deploy = Mock()
+    monkeypatch.setattr(delivery, "deploy", deploy)
+    with pytest.raises(ValueError, match="Build registry"):
+        delivery.main()
+    deploy.assert_not_called()
+
+
+def test_published_manifest_records_build_and_infrastructure_provenance(monkeypatch, release, tmp_path):
+    monkeypatch.setenv("GITHUB_RUN_ID", "40")
+    monkeypatch.setenv("GITHUB_SHA", release["commit"])
+    monkeypatch.setenv("IMAGE_TAG", release["tag"])
+    monkeypatch.setenv("IMAGE_DIGEST", release["digest"])
+    monkeypatch.setenv("INFRASTRUCTURE_RUN_ID", "39")
+    output = tmp_path / "release.json"
+    monkeypatch.setattr(delivery.sys, "argv", ["delivery", "manifest", "--output", str(output)])
+    monkeypatch.setattr(delivery, "registry", lambda: {"id": "/dev/acr"})
+    monkeypatch.setattr(delivery, "image_digest", lambda _: release["digest"])
+    lock = Mock()
+    monkeypatch.setattr(delivery, "lock_image", lock)
+    delivery.main()
+    record = json.loads(output.read_text())
+    assert record["build_run_id"] == "40"
+    assert record["infrastructure_run_id"] == "39"
+    assert record["registry_resource_id"] == "/dev/acr"
+    assert record["commit"] == release["commit"]
+    assert record["digest"] == release["digest"]
+    assert "workflow_run_id" not in record
+    lock.assert_called_once_with(release["tag"])
 
 
 def test_rollback_rejects_configuration_drift(deployed, orchestration, tmp_path):
@@ -725,7 +865,7 @@ def test_azd_runtime_rejects_mismatched_account(monkeypatch, azd_configuration):
 
 def test_workflow_safety_contracts():
     workflows = list((ROOT / ".github/workflows").glob("*.yml"))
-    assert len(workflows) == 6
+    assert len(workflows) == 7
     for path in workflows:
         workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
         assert "pull_request_target" not in workflow["on"]
@@ -737,34 +877,57 @@ def test_workflow_safety_contracts():
                 assert "${{ inputs." not in step.get("run", "")
             if job.get("permissions", {}).get("id-token") == "write":
                 assert "environment" in job or "uses" in job
-    promote = (ROOT / ".github/workflows/release-test-or-prod.yml").read_text()
+    promote = (ROOT / ".github/workflows/deploy-tested-container-to-test-or-prod.yml").read_text()
     assert "docker/build-push-action" not in promote
-    reusable = (ROOT / ".github/workflows/release-agent.yml").read_text()
+    reusable = (ROOT / ".github/workflows/deploy-and-verify-foundry-agent.yml").read_text()
     assert "cancel-in-progress: false" in reusable
     assert "PRODUCTION_DEPLOYMENTS_ENABLED" in reusable
     assert "azure/login@" in reusable
 
 
-def test_release_wires_infrastructure_before_build_and_deployment():
-    release = yaml.load((ROOT / ".github/workflows/release-dev.yml").read_text(), Loader=yaml.BaseLoader)
-    jobs = release["jobs"]
-    assert jobs["infrastructure-dev"]["needs"] == "checks"
-    assert jobs["infrastructure-dev"]["uses"] == "./.github/workflows/create-azure-resources.yml"
-    assert jobs["infrastructure-dev"]["with"] == {"environment": "dev", "operation": "apply"}
-    assert jobs["build"]["needs"] == "infrastructure-dev"
-    assert jobs["deploy-dev"]["needs"] == "build"
-    assert any(step.get("with", {}).get("name") == "infrastructure-dev" for step in jobs["build"]["steps"])
-    assert any("--configure-from infrastructure-input/infrastructure.json" in step.get("run", "")
-               for step in jobs["build"]["steps"])
-    deploy = yaml.load((ROOT / ".github/workflows/release-agent.yml").read_text(), Loader=yaml.BaseLoader)
+def test_infrastructure_build_and_dev_deployment_are_separate_workflows():
+    def workflow(name):
+        return yaml.load((ROOT / ".github/workflows" / name).read_text(), Loader=yaml.BaseLoader)
+
+    build = workflow("build-test-and-publish-container.yml")
+    assert build["on"]["workflow_run"]["workflows"] == ["Create or Update Azure Resources"]
+    assert build["on"]["workflow_run"]["branches"] == ["main"]
+    assert set(build["jobs"]) == {"build"}
+    steps = build["jobs"]["build"]["steps"]
+    build_steps = [step for step in steps if "docker/build-push-action@" in step.get("uses", "")]
+    assert len(build_steps) == 1
+    assert build_steps[0]["with"]["load"] == "true"
+    assert "push" not in build_steps[0]["with"]
+    assert any("fetch-infrastructure" in step.get("run", "") for step in steps)
+    test_step = next(i for i, step in enumerate(steps) if "--image math-tutor:build" in step.get("run", ""))
+    push_step = next(i for i, step in enumerate(steps) if "docker push " in step.get("run", ""))
+    assert test_step < push_step
+    assert all("scripts.delivery deploy" not in step.get("run", "") for step in steps)
+    dev = workflow("deploy-container-to-dev.yml")
+    assert dev["on"]["workflow_run"]["workflows"] == ["Build, Test, and Publish Container"]
+    assert dev["on"]["workflow_run"]["branches"] == ["main"]
+    assert dev["jobs"]["deploy-dev"]["uses"] == "./.github/workflows/deploy-and-verify-foundry-agent.yml"
+    assert "conclusion == 'success'" in dev["jobs"]["deploy-dev"]["if"]
+    assert "head_sha == github.sha" in dev["jobs"]["deploy-dev"]["if"]
+    assert dev["jobs"]["deploy-dev"]["with"]["source_run_id"] == (
+        "${{ github.event.workflow_run.id || inputs.build_run_id }}"
+    )
+    deploy = yaml.load(
+        (ROOT / ".github/workflows/deploy-and-verify-foundry-agent.yml").read_text(),
+        Loader=yaml.BaseLoader,
+    )
     configure = [step for step in deploy["jobs"]["deploy"]["steps"]
                  if "--configure-from" in step.get("run", "")]
     assert len(configure) == 1
     assert configure[0]["if"] == "inputs.target_environment == 'dev'"
+    assert any("fetch-build" in step.get("run", "") for step in deploy["jobs"]["deploy"]["steps"])
+    assert "docker/build-push-action" not in json.dumps(deploy)
     infra = yaml.load((ROOT / ".github/workflows/create-azure-resources.yml").read_text(), Loader=yaml.BaseLoader)
     assert "workflow_call" in infra["on"]
+    assert infra["on"]["push"]["branches"] == ["main"]
+    assert infra["jobs"]["infrastructure"]["needs"] == "checks"
     assert infra["jobs"]["infrastructure"]["env"]["PROVISION_MODEL"] == "${{ vars.PROVISION_MODEL || 'true' }}"
-    assert "infra/azd/main.bicep" in (ROOT / ".github/workflows/build.yml").read_text()
+    assert "infra/azd/main.bicep" in (ROOT / ".github/workflows/build-and-test-container.yml").read_text()
     rollback = yaml.load((ROOT / ".github/workflows/restore-agent-version.yml").read_text(), Loader=yaml.BaseLoader)
     restore = [step for step in rollback["jobs"]["rollback"]["steps"]
                if "--configure-from" in step.get("run", "")]
@@ -796,11 +959,12 @@ def test_runtime_image_uses_pinned_base_and_explicit_application_copies():
 
 def test_workflow_names_and_filenames_describe_their_actions():
     names = {
-        "build.yml": "Build and Test",
+        "build-and-test-container.yml": "Build and Test Container",
         "create-azure-resources.yml": "Create or Update Azure Resources",
-        "release-dev.yml": "Build and Release to Dev",
-        "release-agent.yml": "Release and Verify Foundry Agent (Reusable)",
-        "release-test-or-prod.yml": "Release Tested Image to Test or Prod",
+        "build-test-and-publish-container.yml": "Build, Test, and Publish Container",
+        "deploy-container-to-dev.yml": "Deploy Container to Dev",
+        "deploy-and-verify-foundry-agent.yml": "Deploy and Verify Foundry Agent (Reusable)",
+        "deploy-tested-container-to-test-or-prod.yml": "Deploy Tested Container to Test or Prod",
         "restore-agent-version.yml": "Restore Previous Agent Version",
     }
     assert {path.name for path in (ROOT / ".github/workflows").glob("*.yml")} == set(names)
@@ -811,10 +975,10 @@ def test_workflow_names_and_filenames_describe_their_actions():
         for job in workflow["jobs"].values():
             if job.get("uses", "").startswith("./"):
                 assert (ROOT / job["uses"][2:]).is_file()
-    for filename in ("build.yml", "release-dev.yml"):
+    for filename in ("build-and-test-container.yml", "build-test-and-publish-container.yml"):
         text = (ROOT / ".github/workflows" / filename).read_text()
         assert "python -m scripts.container_smoke --image " in text
-    release = (ROOT / ".github/workflows/release-dev.yml").read_text()
+    release = (ROOT / ".github/workflows/build-test-and-publish-container.yml").read_text()
     assert "provenance: false" in release
     assert "sbom: false" in release
 
@@ -851,7 +1015,7 @@ def test_dependency_locks_have_exact_versions_and_hashes():
 
 
 def test_ci_requires_committed_hash_locks_and_reviewed_base_updates():
-    ci = (ROOT / ".github/workflows/build.yml").read_text()
+    ci = (ROOT / ".github/workflows/build-and-test-container.yml").read_text()
     assert "pip install --require-hashes -r requirements-dev.lock.txt" in ci
     assert "git ls-files --error-unmatch requirements.lock.txt requirements-dev.lock.txt" in ci
     assert "git diff --exit-code -- requirements.lock.txt requirements-dev.lock.txt" in ci

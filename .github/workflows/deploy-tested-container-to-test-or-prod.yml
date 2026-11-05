@@ -1,4 +1,4 @@
-name: Release Tested Image to Test or Prod
+name: Deploy Tested Container to Test or Prod
 
 on:
   workflow_dispatch:
@@ -17,9 +17,9 @@ permissions:
 
 jobs:
   promote:
-    name: Copy the Tested Image and Release the Target Agent
+    name: Copy Tested Container Image and Deploy Target Agent
     if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/release-agent.yml
+    uses: ./.github/workflows/deploy-and-verify-foundry-agent.yml
     permissions:
       contents: read
       actions: read
