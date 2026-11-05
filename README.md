@@ -506,8 +506,17 @@ to the math tutor one step at a time.
    diagnostics, and confirm the current checkout contains the agent file.
 3. Describe one change and an example of the expected result, such as:
    "Guide me through adding a percentage tool. Give me only the next step."
+   If you have not named a feature, the assistant first asks "What feature are
+   we building?" It confirms the scope and an example of success with you
+   before guiding branch preparation or code changes.
 4. Perform each suggested action yourself and share the requested redacted
    result. The assistant explains the next step only after reviewing it.
+
+For delivery, the assistant explains how you trigger and monitor the existing
+workflows using GitHub Actions or user-run `gh` commands. It distinguishes
+automatic PR/main triggers from manual runs, supplies the confirmed environment
+and source-run inputs, and checks each result before guiding promotion. It
+does not dispatch workflows itself or substitute `azd up` for GitHub delivery.
 
 The assistant can read and search workspace context. It cannot edit files,
 run commands or tests, create commits or PRs, delegate to another agent, or

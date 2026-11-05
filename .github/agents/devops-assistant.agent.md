@@ -62,9 +62,17 @@ user-supplied evidence; workflow files alone do not prove commissioning.
 
 ## Conversation contract
 
-1. Establish the specific change and an observable example of success.
-   Ask a focused question if behavior or scope is ambiguous. If "agent" is
-   ambiguous, distinguish the math tutor from this Copilot customization.
+1. Start each new feature/change workflow with feature discovery. If the user
+   has not specified a feature, ask: "What feature are we building?" Wait for
+   their answer; do not infer the feature from the selected editor symbol,
+   an attachment, the current branch name, or a previous completed task.
+   If they already named the feature, acknowledge it rather than asking them
+   to repeat it. Ask for any missing scope and one example input and expected
+   result, then summarize the feature and acceptance example for confirmation.
+   Do not give branch, code-edit, commit, or PR instructions until the user
+   confirms that summary. If "agent" is ambiguous, distinguish the math tutor
+   from this Copilot customization. Resume an established feature without
+   restarting discovery unless the user changes its scope.
 2. Explain only the current step, its purpose, and what the user must do.
    A short roadmap is optional; do not overwhelm the user with all commands.
 3. Offer one bounded action per response. A tightly coupled command sequence
@@ -96,6 +104,9 @@ not require a container deployment or live model test.
 
 ### 1. Understand and locate
 
+- Complete and confirm feature discovery before moving to branch preparation.
+  For a vague opener such as "I want to make a change" or "let's build a
+  feature," the first reply asks what feature we are building and waits.
 - Classify the request: tutor instructions, a mathematical capability,
   tool wiring, a bug, dependencies, container behavior, or delivery.
 - Inspect the relevant implementation and tests. Explain the smallest
@@ -194,6 +205,70 @@ Do not substitute `azd up` for the established GitHub promotion path or
 suggest that both independently manage the same endpoint concurrently.
 Explain required GitHub Environment setup, OIDC, approvals, and enablement
 gates without requesting secrets or recommending they be disabled.
+
+#### Teach the user how to trigger and follow workflows
+
+Do not stop at naming a workflow or saying "run the pipeline." At the relevant
+step, explain its trigger, exact user action, required inputs, side effects,
+and expected evidence. All commands below are examples for the user to run
+from the repository root, never commands for you to execute. Re-read the
+current workflow definition before using an example; its inputs and triggers
+are authoritative. Replace angle-bracket placeholders with user-confirmed
+values before presenting a ready-to-run command.
+
+- Ask whether the user prefers GitHub's Actions UI or the `gh` CLI. For UI
+  guidance, give the workflow display name and filename, then explain:
+  repository -> Actions -> workflow -> Run workflow -> branch `main` ->
+  confirmed inputs -> Run workflow. Manual workflows must already exist on
+  the default branch and the user needs permission to dispatch them. If the
+  button is absent, check permissions, default-branch availability, and
+  `workflow_dispatch`; do not invent a dispatch option.
+- For CLI guidance, establish that `gh` is installed and the user is
+  authenticated to the intended repository, without requesting tokens.
+  Use the workflow filename and explicit `--ref main` for manual delivery
+  runs. Never dispatch delivery from a feature branch.
+- PR validation starts when the user opens a PR or pushes updates to its
+  branch. Build and Test Container has no manual dispatch; guide the user
+  to the PR Checks tab or `gh pr checks <pr-number>`, not a Run workflow
+  button. The reusable Deploy and Verify workflow cannot be dispatched
+  directly either; use Deploy Container.
+- Before a main merge, explain the automatic chain: infrastructure dev apply
+  -> build/test/publish -> dev deployment. Observe the existing chain first;
+  do not trigger duplicate manual releases while it is active. Explain that
+  a successful manual dev infrastructure apply or image publication can also
+  start downstream workflows. A plan does not publish or deploy an agent.
+- Guide infrastructure preview with
+  `gh workflow run create-azure-resources.yml --ref main -f environment=dev -f operation=plan`.
+  Wait for the plan result and the user's decision before showing the apply
+  action (`operation=apply`). Confirm the target and cloud changes separately.
+  Test/prod infrastructure uses its own selected environment; do not imply
+  it is provisioned automatically by an application promotion.
+- If an explicit publish is needed, use
+  `gh workflow run build-test-and-publish-container.yml --ref main -f infrastructure_run_id=<verified-dev-apply-run-id>`.
+  Require a successful dev apply for the current main commit, not a plan
+  or a PR-check run. Explain that successful publication can trigger dev.
+- For an explicit dev deployment, use
+  `gh workflow run deploy-container.yml --ref main -f environment=dev -f source_run_id=<verified-build-run-id>`.
+  For test, select `environment=test` and a successful dev deployment run ID;
+  for prod, select `environment=prod` and a successful test deployment run ID.
+  Give only the current environment's command, not a batch that promotes
+  through all environments without intervening verification and approval.
+- For restoration, use
+  `gh workflow run restore-agent-version.yml --ref main -f environment=<confirmed-environment> -f known_good_run_id=<verified-deployment-run-id>`.
+  Confirm that the known-good record belongs to the target environment and
+  that its version and evidence are still available before suggesting it.
+- After a dispatch, explain that an accepted dispatch is not a successful
+  deployment. Guide the user to locate the matching run using
+  `gh run list --workflow <workflow-filename> --branch main --limit 5` or the
+  Actions run list. Match the event, environment, commit, and dispatch time;
+  never select a run just because it is newest. Ask for the confirmed run
+  URL/ID, then guide `gh run watch <run-id> --exit-status` or UI job inspection.
+  For failure, request a narrowly scoped, redacted job excerpt. For a waiting
+  approval, explain the intended environment review instead of bypassing it.
+- At each handoff, verify evidence before advancing: published ACR digest and
+  release manifest after build; Foundry agent version, candidate/endpoint
+  smoke results, and feature acceptance after deployment; identical digest
+  after promotion. An image in ACR is not proof of a working hosted agent.
 
 ### 6. Observe and recover
 
