@@ -1,3 +1,10 @@
+# Purpose: Build one deployable container image, test it before publishing to
+# Azure Container Registry, then check/scan the published digest and lock the
+# image. Retains the release manifest, scan/SBOM, and infrastructure evidence.
+# Runs after a successful dev infrastructure apply for the same main commit,
+# or manually with that infrastructure run ID. Does not deploy an agent;
+# successful current-main builds hand off to deploy-container.yml.
+
 name: Build, Test, and Publish Container
 
 on:

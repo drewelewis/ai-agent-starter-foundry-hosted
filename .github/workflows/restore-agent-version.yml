@@ -1,3 +1,9 @@
+# Purpose: Restore a previously tested agent version for dev, test, or prod.
+# Runs manually with the target environment and a successful deployment run ID.
+# Verifies retained evidence/configuration, tests the recorded version, switches
+# the endpoint, and tests it again under the target environment's gates.
+# Does not build images or revert infrastructure/model deployments.
+
 name: Restore Previous Agent Version
 
 on:

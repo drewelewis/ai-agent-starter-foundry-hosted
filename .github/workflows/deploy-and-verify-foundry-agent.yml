@@ -1,3 +1,10 @@
+# Purpose: Share the actual Foundry agent deployment steps across environments.
+# Called by deploy-container.yml; not a manually runnable entry point.
+# Verifies source evidence, imports the same image digest for promotion, deploys
+# agent versions, tests candidate/endpoint responses, and records the result.
+# Applies the target environment's identity, gates, and concurrency controls.
+# Never builds an image.
+
 name: Deploy and Verify Foundry Agent (Reusable)
 
 on:
