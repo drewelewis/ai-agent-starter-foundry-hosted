@@ -1,4 +1,4 @@
-name: Rollback
+name: Restore Previous Agent Version
 
 on:
   workflow_dispatch:
@@ -17,6 +17,7 @@ permissions:
 
 jobs:
   rollback:
+    name: Restore and Verify a Previously Tested Version
     if: github.ref == 'refs/heads/main'
     environment: ${{ inputs.environment }}
     concurrency:

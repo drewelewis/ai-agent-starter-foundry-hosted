@@ -1,4 +1,4 @@
-name: Infrastructure
+name: Create or Update Azure Resources
 
 on:
   workflow_dispatch:
@@ -30,6 +30,7 @@ concurrency:
 
 jobs:
   infrastructure:
+    name: Validate and Apply Azure Resource Configuration
     if: github.ref == 'refs/heads/main'
     environment: ${{ inputs.environment }}
     runs-on: ubuntu-24.04

@@ -48,11 +48,13 @@ tests/
 test_*.py
 *_test.py
 requirements-dev.txt
+requirements-dev.lock.txt
 
 # CI/CD
 .github/
 scripts/
 infra/
+infrastructure-input/
 release-output/
 release-input/
 .azure/

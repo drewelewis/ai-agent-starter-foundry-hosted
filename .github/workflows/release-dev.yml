@@ -1,4 +1,4 @@
-name: Release
+name: Build and Release to Dev
 
 on:
   push:
@@ -14,11 +14,13 @@ concurrency:
 
 jobs:
   checks:
+    name: Build and Test
     if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/build.yml
   infrastructure-dev:
+    name: Create or Update Dev Azure Resources
     needs: checks
-    uses: ./.github/workflows/infrastructure.yml
+    uses: ./.github/workflows/create-azure-resources.yml
     permissions:
       contents: read
       id-token: write
@@ -26,6 +28,7 @@ jobs:
       environment: dev
       operation: apply
   build:
+    name: Build, Test, and Publish the Release Image
     needs: infrastructure-dev
     environment: dev
     runs-on: ubuntu-24.04
@@ -86,7 +89,7 @@ jobs:
             -e AZURE_OPENAI_ENDPOINT=https://example.openai.azure.com/ \
             -e AZURE_AI_MODEL_DEPLOYMENT_NAME=offline-check \
             -e OTEL_SDK_DISABLED=true "$IMAGE"
-          python scripts/container_smoke.py
+          python -m scripts.container_smoke --image "$IMAGE"
           mkdir -p release-output
       - name: Scan the exact digest
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -132,8 +135,9 @@ jobs:
             docker rm -f math-tutor-release
           fi
   deploy-dev:
+    name: Release and Verify the Dev Agent
     needs: build
-    uses: ./.github/workflows/deploy.yml
+    uses: ./.github/workflows/release-agent.yml
     permissions:
       contents: read
       actions: read

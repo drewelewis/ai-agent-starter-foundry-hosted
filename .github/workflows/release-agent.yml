@@ -1,4 +1,4 @@
-name: Reusable Foundry deployment
+name: Release and Verify Foundry Agent (Reusable)
 
 on:
   workflow_call:
@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   deploy:
+    name: Release the Selected Image and Verify Responses
     if: github.ref == 'refs/heads/main'
     environment: ${{ inputs.target_environment }}
     concurrency:
