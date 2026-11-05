@@ -732,13 +732,13 @@ Never commit actual credentials.
 | `AZURE_AI_ACCOUNT_ID`, `AZURE_AI_PROJECT_ID` | Test/prod runtime role | Account/project ARM IDs from infrastructure; supplied automatically in dev |
 | `AZURE_AI_PROJECT_ENDPOINT` | Test/prod deploy/rollback | Project endpoint; dev deploy/rollback consumes infrastructure artifacts |
 | `AZURE_OPENAI_ENDPOINT` | Test/prod deploy | Same account's direct model resource endpoint, not the project URL; automatic in dev |
-| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | Model provisioning / test/prod deploy | Defaults to `math-tutor` when provisioning; automatic output in dev |
+| `AZURE_AI_MODEL_DEPLOYMENT_NAME` | Test/prod deploy | Provisioning derives this output from `MODEL_NAME` (`gpt-5-mini` by default); not an independent provisioning-name override. Dev consumes it automatically; update test/prod variables after a model-name migration |
 | `FOUNDRY_AGENT_NAME` | Agent deploy/rollback | Stable lowercase name; defaults to `math-tutor` |
 | `ADOPT_EXISTING_VERSION` | Explicit ownership handoff | Current latest concrete version to pin before adopting an existing `@latest` endpoint; remove after handoff |
 | `SOURCE_ACR_RESOURCE_ID` | Promotion | Dev ACR ID in test; test ACR ID in prod |
 | `PROVISION_MODEL` | Infrastructure | Defaults to `true`; keep true for automatic dev; false only for separately configured infrastructure/model |
 | `MODEL_NAME`, `MODEL_VERSION` | Model provisioning | Defaults `gpt-5-mini`, `2025-08-07`; review availability/quota |
-| `MODEL_SKU`, `MODEL_CAPACITY` | Model provisioning | Defaults `GlobalStandard`, `1`; override with supported values |
+| `MODEL_SKU`, `MODEL_CAPACITY` | Model provisioning | Defaults `GlobalStandard`, `100` (100 RPM / 100,000 TPM for the selected GPT-5-mini deployment); model-specific ratios apply, so check quota per environment before overriding |
 
 The build downloads `infrastructure-dev` from a verified successful dev apply
 for the same commit, then retains a copy. Dev deployment downloads that copy

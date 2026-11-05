@@ -714,7 +714,13 @@ def test_infra_plan_uses_environment_parameters_without_applying(monkeypatch, tm
     assert parameters["location"]["value"] == "northcentralus"
 
 
-def test_infra_apply_reconciles_group_and_model_defaults(monkeypatch, tmp_path):
+@pytest.mark.parametrize(("capacity", "expected_capacity"), [
+    (None, 100), ("", 100), ("5", 5), ("100", 100),
+])
+@pytest.mark.parametrize("model_name", [None, "gpt-5-mini", "gpt-4.1-mini"])
+def test_infra_apply_reconciles_group_and_model_defaults(
+    monkeypatch, tmp_path, capacity, expected_capacity, model_name,
+):
     monkeypatch.chdir(tmp_path)
     for key, value in {
         "AZURE_RESOURCE_GROUP": "rg-tutor", "AZURE_LOCATION": "northcentralus",
@@ -724,6 +730,11 @@ def test_infra_apply_reconciles_group_and_model_defaults(monkeypatch, tmp_path):
     for key in ("PROVISION_MODEL", "MODEL_NAME", "MODEL_VERSION", "MODEL_SKU", "MODEL_CAPACITY",
                 "AZURE_AI_MODEL_DEPLOYMENT_NAME"):
         monkeypatch.delenv(key, raising=False)
+    if capacity is not None:
+        monkeypatch.setenv("MODEL_CAPACITY", capacity)
+    if model_name is not None:
+        monkeypatch.setenv("MODEL_NAME", model_name)
+    monkeypatch.setenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "stale-deployment-name")
     calls = []
 
     def azure(*args):
@@ -743,13 +754,15 @@ def test_infra_apply_reconciles_group_and_model_defaults(monkeypatch, tmp_path):
     assert calls[1] == ("group", "create", "--name", "rg-tutor", "--location", "northcentralus")
     parameters = json.loads((tmp_path / "release-output/infra.parameters.json").read_text())["parameters"]
     assert {key: parameters[key]["value"] for key in (
-        "deployModel", "modelDeploymentName", "modelName", "modelVersion", "modelSku", "modelCapacity",
+        "deployModel", "modelName", "modelVersion", "modelSku", "modelCapacity",
         "foundryAccountName",
     )} == {
-        "deployModel": True, "modelDeploymentName": "math-tutor", "modelName": "gpt-5-mini",
-        "modelVersion": "2025-08-07", "modelSku": "GlobalStandard", "modelCapacity": 1,
+        "deployModel": True, "modelName": model_name or "gpt-5-mini",
+        "modelVersion": "2025-08-07", "modelSku": "GlobalStandard",
+        "modelCapacity": expected_capacity,
         "foundryAccountName": "adopted-foundry",
     }
+    assert "modelDeploymentName" not in parameters
     assert json.loads((tmp_path / "release-output/infrastructure.json").read_text()) == {
         "example": {"value": "output"},
     }
@@ -820,6 +833,15 @@ def test_azd_hosted_deployment_contract():
     }
     template = (ROOT / "infra/azd/main.bicep").read_text()
     assert "deployContainerRegistry: true" in template
+    assert "param modelCapacity int = 100" in template
+    assert "modelDeploymentName" not in template
+    resource_template = (ROOT / "infra/main.bicep").read_text()
+    assert "param modelCapacity int = 100" in resource_template
+    assert "isSharedToAll: false" in resource_template
+    assert "raiPolicyName: 'Microsoft.DefaultV2'" in resource_template
+    assert "name: modelName" in resource_template
+    assert "output AZURE_AI_MODEL_DEPLOYMENT_NAME string = deployModel ? modelName : ''" in resource_template
+    assert "modelDeploymentName" not in resource_template
     for output in (
         "FOUNDRY_PROJECT_ENDPOINT", "AZURE_AI_PROJECT_ID", "AZURE_TENANT_ID",
         "AZURE_CONTAINER_REGISTRY_NAME", "AZURE_CONTAINER_REGISTRY_ENDPOINT",

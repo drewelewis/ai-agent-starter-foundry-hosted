@@ -15,6 +15,7 @@ from tools.catalog import MATH_TOOLS
 
 @pytest.fixture(autouse=True)
 def isolate_model_configuration(monkeypatch):
+    monkeypatch.delenv("ENABLE_LOCAL_DIAGNOSTICS", raising=False)
     for name in tutor_agent.MODEL_ENVIRONMENT_VARIABLES:
         monkeypatch.delenv(name, raising=False)
 
@@ -73,7 +74,27 @@ def test_canonical_settings_take_precedence(monkeypatch):
     assert client_factory.call_args.kwargs["model"] == "canonical-deployment"
 
 
-def test_real_agent_invokes_geometry_tool_offline(monkeypatch):
+@pytest.mark.parametrize("diagnostics", [False, True])
+@pytest.mark.parametrize(
+    ("name", "arguments", "prompt", "answer", "tool_output"),
+    [
+        (
+            "rectangle_area", {"length": 3, "width": 4},
+            "Find rectangle area for length 3 and width 4.",
+            "The area is 12 square units.", "12",
+        ),
+        (
+            "differentiate_polynomial", {"coefficients": [3, 0, 1]},
+            "Give me the derivative of 3x squared + 1.",
+            "The derivative is 6x by the power rule.",
+            "Derivative with respect to x: 6*x",
+        ),
+    ],
+)
+def test_real_agent_invokes_tool_offline(
+    monkeypatch, name, arguments, prompt, answer, tool_output, diagnostics,
+):
+    monkeypatch.setenv("ENABLE_LOCAL_DIAGNOSTICS", str(diagnostics).lower())
     requests = []
 
     def handle(request):
@@ -84,8 +105,8 @@ def test_real_agent_invokes_geometry_tool_offline(monkeypatch):
                 "type": "function_call",
                 "id": "fc_offline",
                 "call_id": "call_offline",
-                "name": "rectangle_area",
-                "arguments": '{"length": 3, "width": 4}',
+                "name": name,
+                "arguments": json.dumps(arguments),
                 "status": "completed",
             }]
         else:
@@ -95,7 +116,7 @@ def test_real_agent_invokes_geometry_tool_offline(monkeypatch):
                 "status": "completed",
                 "role": "assistant",
                 "content": [{
-                    "type": "output_text", "text": "The area is 12 square units.",
+                    "type": "output_text", "text": answer,
                     "annotations": [],
                 }],
             }]
@@ -115,12 +136,12 @@ def test_real_agent_invokes_geometry_tool_offline(monkeypatch):
         monkeypatch.setenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "offline-test")
         async with openai_client:
             async with await tutor_agent.create_tutor_agent() as agent:
-                return await agent.run("Find rectangle area for length 3 and width 4.")
+                return await agent.run(prompt)
 
     result = asyncio.run(run())
-    assert result.text == "The area is 12 square units."
+    assert result.text == answer
     assert len(requests) == 2
     assert requests[0]["store"] is False
     outputs = [item for item in requests[1]["input"] if item.get("type") == "function_call_output"]
     assert len(outputs) == 1
-    assert "12" in outputs[0]["output"]
+    assert tool_output in outputs[0]["output"]

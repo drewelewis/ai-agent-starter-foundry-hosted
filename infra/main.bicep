@@ -26,7 +26,7 @@ param tags object = {
 @description('Deploy a model in the new account. Leave false when using an existing model resource.')
 param deployModel bool = false
 
-param modelDeploymentName string = 'math-tutor'
+@description('Model catalog name; also used as the deployment name when deployModel is true.')
 param modelName string = ''
 param modelVersion string = ''
 
@@ -38,7 +38,8 @@ param modelVersion string = ''
 param modelSku string = 'GlobalStandard'
 
 @minValue(1)
-param modelCapacity int = 1
+@description('Model-specific quota units. For the selected GPT-5-mini GlobalStandard deployment, 100 units provides 100 RPM and 100,000 TPM; verify quota and model rate ratios before changing.')
+param modelCapacity int = 100
 
 @description('Create the registry and project image-pull connection needed for hosted agents.')
 param deployContainerRegistry bool = true
@@ -113,7 +114,7 @@ resource registryConnection 'Microsoft.CognitiveServices/accounts/projects/conne
     category: 'ContainerRegistry'
     authType: 'ManagedIdentity'
     target: containerRegistry!.properties.loginServer
-    isSharedToAll: true
+    isSharedToAll: false
     credentials: {
       clientId: foundryProject.identity.principalId
       resourceId: containerRegistry.id
@@ -138,7 +139,7 @@ resource developerModelUser 'Microsoft.Authorization/roleAssignments@2022-04-01'
 
 resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = if (deployModel) {
   parent: foundryAccount
-  name: modelDeploymentName
+  name: modelName
   // Foundry rejects concurrent project/model writes on the parent account.
   dependsOn: [
     foundryProject
@@ -154,6 +155,7 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-
       version: modelVersion
     }
     versionUpgradeOption: 'NoAutoUpgrade'
+    raiPolicyName: 'Microsoft.DefaultV2'
   }
 }
 
@@ -169,5 +171,5 @@ output AZURE_OPENAI_ENDPOINT string = foundryAccount.properties.endpoints['OpenA
 output AZURE_CONTAINER_REGISTRY_NAME string = deployContainerRegistry ? containerRegistry!.name : ''
 output AZURE_CONTAINER_REGISTRY_ID string = deployContainerRegistry ? containerRegistry!.id : ''
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = deployContainerRegistry ? containerRegistry!.properties.loginServer : ''
-output AZURE_AI_MODEL_DEPLOYMENT_NAME string = deployModel ? modelDeploymentName : ''
+output AZURE_AI_MODEL_DEPLOYMENT_NAME string = deployModel ? modelName : ''
 output AZURE_AI_PROJECT_ACR_CONNECTION_NAME string = deployContainerRegistry ? registryConnection!.name : ''

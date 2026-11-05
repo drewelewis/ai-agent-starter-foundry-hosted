@@ -26,6 +26,7 @@ endpoint.
 | Solid geometry | `cuboid_volume`, `cuboid_surface_area`, `cylinder_volume`, `cylinder_surface_area`, `sphere_volume`, `sphere_surface_area` |
 | Right triangles and coordinates | `pythagorean_hypotenuse`, `coordinate_distance` |
 | Algebra | `solve_linear_equation`, `solve_quadratic_equation` |
+| Calculus | `differentiate_polynomial` |
 
 Squares and cubes use the rectangle and cuboid tools with equal dimensions.
 Geometry dimensions must be finite and strictly positive; coordinates can be
@@ -38,6 +39,15 @@ Linear equations use `a*x + b = 0`. Quadratics use `a*x^2 + b*x + c = 0`.
 The solvers handle zero coefficients, repeated roots, no solution, infinitely many
 solutions, and no real roots. Quadratics with `a = 0` reduce to linear equations.
 Only real solutions are supported; calculations use floating-point precision.
+
+Polynomial derivatives use the power rule for a single variable, `x`, with
+finite real coefficients and nonnegative integer powers. The tool accepts
+coefficients in descending powers, including zeros for missing terms:
+`3*x^2 + 1` is `[3, 0, 1]` and its derivative is `6*x`. Constants differentiate
+to zero. Natural-language expressions are normalized by the tutor; the tool
+does not parse or execute expression strings. General functions, negative or
+fractional powers, integrals, and limits are not supported by this tool.
+Invalid inputs and results outside the finite numeric range raise explicit errors.
 
 ## Getting started
 
@@ -116,8 +126,8 @@ region before provisioning again.
 | Resource group | `rg-<azd-environment>`, tagged with `azd-env-name` |
 | Foundry account | Generated `foundry-...` name, AIServices S0, system-assigned identity |
 | Foundry project | `math-tutor`, with its own system-assigned identity |
-| Model deployment | Deployment name `math-tutor`; model `gpt-5-mini`, version `2025-08-07` |
-| Model SKU/capacity | `GlobalStandard`, capacity 1, automatic model upgrades disabled |
+| Model deployment | Deployment name and model `gpt-5-mini`, version `2025-08-07` |
+| Model SKU/capacity | `GlobalStandard`, capacity 100 (100 RPM / 100,000 TPM for this model), automatic model upgrades disabled |
 | Developer permission | `Cognitive Services OpenAI User` scoped to the new account |
 | Container registry | Basic ACR, admin/anonymous access disabled |
 | Image-pull access | Project managed identity `AcrPull` assignment and registry connection |
@@ -129,9 +139,15 @@ Swagger and message-content telemetry remain disabled in the hosted runtime.
 
 Public network access is enabled, but Entra authentication is required and
 local/key authentication is disabled. GlobalStandard can process requests outside
-the resource region. Model usage incurs Azure charges; capacity 1 is not a
+the resource region. Model usage incurs Azure charges; capacity 100 is not a
 spending cap. Review the model/SKU/version parameters before adopting this
 configuration for a different workload.
+
+Capacity is a model-specific quota allocation, not separately configurable RPM
+and TPM limits. The selected GPT-5-mini GlobalStandard deployment uses 1 RPM and
+1,000 TPM per unit. Confirm available quota before deploying each environment;
+the default allocates 100 units per model deployment. Other models/SKUs can use
+different ratios.
 
 ACR storage/builds and hosted compute also incur charges. The deployer needs
 permission to assign the runtime identity's model access; project image-pull
@@ -171,15 +187,25 @@ equivalent settings for your existing model deployment:
 
 ```dotenv
 AZURE_OPENAI_ENDPOINT=https://<foundry-account-name>.openai.azure.com/
-AZURE_AI_MODEL_DEPLOYMENT_NAME=math-tutor
+AZURE_AI_MODEL_DEPLOYMENT_NAME=gpt-5-mini
 DEFAULT_AD_PORT=8088
 ENABLE_SWAGGER=true
 ```
 
-`AZURE_AI_MODEL_DEPLOYMENT_NAME` is the deployment name, not the model family
-`gpt-5-mini`. The OpenAI resource endpoint is not the Foundry project endpoint.
+`AZURE_AI_MODEL_DEPLOYMENT_NAME` selects the deployed model. This repository
+names provisioned deployments exactly after `modelName` (`gpt-5-mini` by default).
+For an existing externally managed deployment, use its actual deployment name.
+The OpenAI resource endpoint is not the Foundry project endpoint.
 Leave the legacy `AZURE_OPENAI_API_ENDPOINT` and `MODEL_DEPLOYMENT_NAME` aliases
 blank when using these canonical settings.
+
+Existing environments that deployed the model as `math-tutor` will create a
+new `gpt-5-mini` deployment on the next provision. The old deployment is not
+renamed or automatically deleted and continues to reserve quota. The hosted
+agent receives the new deployment name from provisioning outputs; update the
+local `.env` value yourself after provisioning and restart the local server.
+Keep the old deployment until its consumers have migrated and the new one is
+verified. The hosted agent and Foundry project remain named `math-tutor`.
 
 Authentication uses `DefaultAzureCredential`; your local `az login` identity
 must have model-invocation access. No API key is needed. Process environment
@@ -227,6 +253,44 @@ If the client cannot connect, check that `main.py` is running and that both
 programs use the same port. For authentication/authorization errors during a
 question, check `az login`, the two model settings, and model-invocation RBAC.
 Inspect server logs for model, quota, or tool errors.
+
+#### Local failure diagnostics
+
+The hosting SDK intentionally hides exception details when sensitive-data
+capture is disabled. To investigate a generic `server_error` without recording
+prompts or model responses, enable metadata-only diagnostics in the server
+terminal. From the repository root in Windows Command Prompt:
+
+```bat
+set "ENABLE_LOCAL_DIAGNOSTICS=true"
+.\.venv\Scripts\python.exe -u main.py > .venv\agent-local.log 2>&1
+```
+
+In PowerShell, set `$env:ENABLE_LOCAL_DIAGNOSTICS = "true"` before running the
+same Python command. Stop an existing local server with Ctrl+C before starting
+its replacement. Leave the replacement running; output is redirected to the log.
+Use the chat client in another terminal to reproduce once (a paid model call),
+then extract the metadata lines:
+
+```bat
+powershell -NoProfile -Command "Select-String -Path .venv\agent-local.log -Pattern local_agent_failure -SimpleMatch"
+```
+
+Diagnostics default to false and accept only `true` or `false`. When enabled,
+failures retain their normal error behavior and emit a `local_agent_failure`
+JSON line to stderr, bypassing telemetry logging handlers. It contains a trace
+ID when available, exception-chain types, stack filenames/functions/line numbers
+(no source lines or locals), numeric HTTP status codes, and recognized provider
+error codes. Unknown provider codes and all exception messages, response bodies,
+headers, prompts, and tool arguments are omitted. No model calls are made just
+by enabling the setting. The middleware covers streaming and non-streaming runs.
+
+The application does not export these diagnostic lines, but a host can still
+collect stderr. Keep this option disabled in hosted environments. Other SDK log
+lines follow their own telemetry settings; do not enable global sensitive-data
+capture or share the whole log. The local file stays under the ignored virtual
+environment directory. After troubleshooting, stop the server, set
+`ENABLE_LOCAL_DIAGNOSTICS=false`, and restart it normally.
 
 #### Swagger on the same local server
 
@@ -286,7 +350,7 @@ See [endpoints.md](endpoints.md) for endpoint details, sample requests/responses
 streaming, conversation continuation, and a PowerShell walkthrough.
 
 Local development and the container both start [main.py](main.py), which wraps
-the tutor and all 23 tools with Microsoft's `ResponsesHostServer`.
+the tutor and all 24 tools with Microsoft's `ResponsesHostServer`.
 This is the only application server. There is no separate REST API,
 `/chat`, or `/calculate` endpoint. Optional Swagger at `/docs` documents these
 same hosted routes when `ENABLE_SWAGGER=true`. Use [chat.py](chat.py) to send local requests
@@ -428,6 +492,38 @@ non-streaming JSON, SSE, history input, and health probes. A live model invocati
 and deployment smoke test still require Azure configuration.
 Client tests also exercise HTTP failures, response validation, conversation
 continuation and reset against the real host adapter without live model calls.
+
+## Guided changes with the DevOps Assistant
+
+The repository includes a read-only
+[DevOps Assistant](.github/agents/devops-assistant.agent.md) for making changes
+to the math tutor one step at a time.
+
+1. Open this repository in VS Code with GitHub Copilot enabled.
+2. Open Chat, select **DevOps Assistant** from the agent selector, and start a
+   new conversation. If it is not listed, use **Chat: Open Customizations** in
+   the Command Palette, check the workspace Agents list and any configuration
+   diagnostics, and confirm the current checkout contains the agent file.
+3. Describe one change and an example of the expected result, such as:
+   "Guide me through adding a percentage tool. Give me only the next step."
+4. Perform each suggested action yourself and share the requested redacted
+   result. The assistant explains the next step only after reviewing it.
+
+The assistant can read and search workspace context. It cannot edit files,
+run commands or tests, create commits or PRs, delegate to another agent, or
+make model calls or deployments. Code and commands it presents are suggestions
+for you to review and execute, not actions it has performed.
+
+To check the role, ask it to run the tests or deploy the agent: it should
+explain its guide-only boundary and offer the next user-performed step instead
+of attempting execution. The definition has no editing, terminal, cloud, or
+delegation tools and does not request a particular model.
+
+Tool restrictions depend on the selected host honoring the configuration.
+Verify the available tools and actual activity in your VS Code session;
+agent instructions are not a security sandbox and do not replace GitHub
+permissions, branch protection, or environment approvals. This customization
+does not change the hosted math tutor, its container, or the delivery workflows.
 
 ## Docker
 

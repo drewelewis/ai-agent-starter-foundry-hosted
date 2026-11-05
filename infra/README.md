@@ -24,6 +24,10 @@ The account and project have system-assigned identities. Public endpoints are
 enabled, but Foundry key authentication, ACR admin credentials, and anonymous
 image pulls are disabled. The registry uses registry-level RBAC so `AcrPull`
 applies; it is not configured for repository-level ABAC.
+The registry connection is project-scoped (`isSharedToAll: false`), matching
+the existing developer deployment rather than widening connection sharing on
+reprovision. Model deployments explicitly retain the built-in
+`Microsoft.DefaultV2` content-filter policy and disable automatic version upgrades.
 
 No Azure resources are created by adding or compiling these files. Deployment
 will incur Azure charges, including ongoing ACR charges.
@@ -53,8 +57,27 @@ location from the protected GitHub Environment, and preserves custom resource
 names. Apply can create a missing group when authorized; plan requires an
 existing group. Precreating groups allows narrowly scoped bootstrap roles.
 The workflow enables model provisioning by default with `gpt-5-mini`,
-`2025-08-07`, `GlobalStandard`, capacity 1; reviewed environment variables can
+`2025-08-07`, `GlobalStandard`, capacity 100; reviewed environment variables can
 override this policy. Direct Bicep defaults still leave model creation off.
+
+Provisioned model deployments are named exactly after `modelName` (`MODEL_NAME`
+in GitHub Actions); there is no separate `modelDeploymentName` parameter.
+`AZURE_AI_MODEL_DEPLOYMENT_NAME` is the resulting output/runtime selector, not
+a provisioning override. Remove the old parameter from any custom parameter
+files before deploying. The hosted agent and project names are independent.
+
+For environments with an older `math-tutor` model deployment, the next provision
+creates `gpt-5-mini` alongside it. Incremental deployment does not rename or delete
+the old deployment, so both reserve quota until the old one is deliberately
+removed. Verify the new deployment and migrate local clients and test/prod
+variables before considering cleanup; no automatic deletion is performed.
+
+For this GPT-5-mini GlobalStandard deployment, 100 capacity units provides
+100 requests per minute and 100,000 tokens per minute. RPM and TPM are coupled;
+they cannot be configured independently. Each environment's deployment allocates
+its own capacity from the applicable quota pool. Check available quota before
+applying, and verify actual deployment rate limits afterward. Other models/SKUs
+can have different capacity-unit ratios.
 
 Release passes dev outputs to its build/deploy jobs automatically through the
 `infrastructure-dev` artifact, rather than copying them into GitHub variables.
@@ -72,7 +95,7 @@ The root [azure.yaml](../azure.yaml) uses the subscription-scoped
 [azd entry point](azd/main.bicep), which reuses the resource-group template.
 It creates `rg-<environment>`, a public Foundry account/project, and a
 `gpt-5-mini` model deployment pinned to `2025-08-07`, using `GlobalStandard`
-with capacity 1. Confirm regional model availability and subscription quota
+with capacity 100. Confirm regional model availability and subscription quota
 before deploying. GlobalStandard may process requests outside the resource's
 region; use an appropriate supported SKU if data residency is required.
 
@@ -98,7 +121,7 @@ azd env get-values
 The environment is saved under the ignored `.azure` directory. Model defaults
 are parameters in the azd entry point; override them through
 [main.parameters.json](azd/main.parameters.json) when choosing a different
-model/version/SKU/capacity. Model use incurs charges; capacity 1 is a quota
+model/version/SKU/capacity. Model use incurs charges; capacity 100 is a quota
 allocation, not a spending limit.
 
 Set `AZURE_OPENAI_ENDPOINT` and `AZURE_AI_MODEL_DEPLOYMENT_NAME` from the azd

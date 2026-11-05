@@ -18,6 +18,7 @@ from agents.tutor_agent import MODEL_ENVIRONMENT_VARIABLES
 @pytest.fixture(autouse=True)
 def isolate_swagger_setting(monkeypatch):
     monkeypatch.delenv("ENABLE_SWAGGER", raising=False)
+    monkeypatch.delenv("ENABLE_LOCAL_DIAGNOSTICS", raising=False)
 
 
 @pytest.fixture

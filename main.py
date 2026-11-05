@@ -6,12 +6,14 @@ import os
 from agent_framework_foundry_hosting import ResponsesHostServer
 from dotenv import load_dotenv
 
+from agents.diagnostics import local_diagnostics_enabled
 from agents.tutor_agent import create_tutor_agent, model_configuration
 from server_docs import add_swagger_routes
 
 
 async def main() -> None:
     load_dotenv(override=False)
+    local_diagnostics_enabled()
     model_configuration()
     enable_swagger = os.getenv("ENABLE_SWAGGER", "false").strip().lower()
     if enable_swagger not in ("true", "false"):
