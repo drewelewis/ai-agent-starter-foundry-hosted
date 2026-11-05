@@ -1,4 +1,4 @@
-name: Deploy Container to Dev
+name: Deploy Container
 
 on:
   workflow_run:
@@ -7,8 +7,14 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      build_run_id:
-        description: Successful Build, Test, and Publish Container run
+      environment:
+        description: Target environment; automatic build completion always deploys dev
+        type: choice
+        options: [dev, test, prod]
+        default: dev
+        required: true
+      source_run_id:
+        description: "Dev: successful build run; test: successful dev deployment; prod: successful test deployment"
         type: string
         required: true
 
@@ -16,8 +22,8 @@ permissions:
   contents: read
 
 jobs:
-  deploy-dev:
-    name: Deploy Published Container and Verify Dev Agent
+  deploy:
+    name: Deploy Container to ${{ inputs.environment || 'dev' }} and Verify Agent
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' ||
@@ -29,5 +35,5 @@ jobs:
       actions: read
       id-token: write
     with:
-      target_environment: dev
-      source_run_id: ${{ github.event.workflow_run.id || inputs.build_run_id }}
+      target_environment: ${{ inputs.environment || 'dev' }}
+      source_run_id: ${{ github.event.workflow_run.id || inputs.source_run_id }}

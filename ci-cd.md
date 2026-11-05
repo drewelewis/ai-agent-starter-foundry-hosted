@@ -82,8 +82,8 @@ latest routing. Remove the variable after a successful handoff.
 |---|---|---|---|
 | Local workstation | `main.py` Responses server on 8088; `chat.py` HTTP client; offline tests | `.venv`, ignored `.env`, developer Azure login, non-production model; Docker optional | Run locally while editing; no ACR push or agent deployment |
 | Dev | Hosted agent version using the new release image; candidate and endpoint numeric smoke tests | Dedicated resource group, account/project, model, ACR, GitHub `dev` variables/OIDC | Main push chains separate infrastructure, build/publish, and deployment runs; manual deployment selects a successful build; live smoke |
-| Test | Hosted agent using the same digest imported from dev; qualification testing | Separate resource group, account/project, model, ACR, GitHub `test` variables/OIDC | Deploy Tested Container to Test or Prod with successful dev deployment run ID; provenance/digest checks and live smoke; broader qualification before prod |
-| Prod | Hosted agent using the same digest imported from test; synthetic smoke | Isolated production account/project, model, ACR and identities; separate subscription where practical | Deploy Tested Container to Test or Prod with successful test deployment run ID; configured Environment reviewers and both deployment flags; live smoke |
+| Test | Hosted agent using the same digest imported from dev; qualification testing | Separate resource group, account/project, model, ACR, GitHub `test` variables/OIDC | Deploy Container with environment `test` and successful dev deployment run ID; provenance/digest checks and live smoke; broader qualification before prod |
+| Prod | Hosted agent using the same digest imported from test; synthetic smoke | Isolated production account/project, model, ACR and identities; separate subscription where practical | Deploy Container with environment `prod` and successful test deployment run ID; configured Environment reviewers and both deployment flags; live smoke |
 
 Use the same Bicep template with separate parameter files for each cloud
 environment. An environment name is not an isolation boundary by itself: its
@@ -249,8 +249,7 @@ These workflows are implemented:
 | [Build and Test Container](.github/workflows/build-and-test-container.yml) | Pull requests; reusable call before infrastructure changes | Verify dependency locks, Python 3.11 tests, actionlint, Bicep compilation, image contents/non-root user and startup; no Azure credentials on PRs |
 | [Create or Update Azure Resources](.github/workflows/create-azure-resources.yml) | Main push; reusable call; manual `plan` or `apply` | Pass checks, then reconcile resources/model; publish configuration outputs; no image publishing or agent deployment |
 | [Build, Test, and Publish Container](.github/workflows/build-test-and-publish-container.yml) | Successful dev infrastructure apply; manual infrastructure run ID | Verify source configuration, build once, test before pushing, test/scan published digest, lock image, publish manifest; no agent deployment |
-| [Deploy Container to Dev](.github/workflows/deploy-container-to-dev.yml) | Successful container publish; manual build run ID | Verify the successful build, deploy its exact digest and configuration, test agent; no container build |
-| [Deploy Tested Container to Test or Prod](.github/workflows/deploy-tested-container-to-test-or-prod.yml) | Manual source deployment run ID | Verify source-run provenance, copy by digest, deploy test or prod; no container build |
+| [Deploy Container](.github/workflows/deploy-container.yml) | Successful container publish automatically targets dev; manual environment and source run ID | Verify the source build for dev or preceding deployment for test/prod, copy by digest when promoting, deploy and test the agent; no container build |
 | [Deploy and Verify Foundry Agent (Reusable)](.github/workflows/deploy-and-verify-foundry-agent.yml) | Reusable workflow | Environment gates, runtime model role, candidate smoke, endpoint selection, evidence |
 | [Restore Previous Agent Version](.github/workflows/restore-agent-version.yml) | Manual known-good run ID | Verify source-run provenance and restore a recorded version |
 
@@ -265,6 +264,15 @@ the same steps. Infrastructure, container publishing, and dev deployment are
 separate workflow runs, connected by successful `workflow_run` completion and
 explicit source-run IDs. The build never deploys an agent; deployment never
 rebuilds the image. Test/prod infrastructure is separately approved.
+
+There is one deployment entry workflow, not one per environment. Automatic
+build completion always targets dev. Manual runs select `dev`, `test`, or
+`prod` and a `source_run_id`: a successful build for dev, a successful dev
+deployment for test, or a successful test deployment for prod. The same
+workflow path is verified for all deployment records; the recorded environment
+and successful status must also match. Test/prod records must come from manual
+runs, never the automatic dev trigger. Environment protection, concurrency,
+and deployment identity remain specific to the selected target.
 
 Docker documents [building/testing/publishing images](https://docs.docker.com/build/ci/github-actions/test-before-push/)
 but does not mandate separate GitHub workflow files. We separate them here
@@ -473,7 +481,7 @@ Merge the reviewed PR after checks succeed. Three separate workflows run:
    `release` plus a retained copy of `infrastructure-dev`. The manifest records
    the commit, build run ID, infrastructure run ID, registry ID, and digest.
    This workflow does not deploy an agent.
-3. [Deploy Container to Dev](.github/workflows/deploy-container-to-dev.yml)
+3. [Deploy Container](.github/workflows/deploy-container.yml)
    starts only after successful publishing for the current main tip. It
    verifies the build's path/branch/event/repository/result and manifest
    commit/run, then downloads that build's configuration. With the deploy
@@ -487,7 +495,7 @@ Review each run; the build run ID and dev deployment run ID are different:
 
 ```powershell
 gh run list --workflow build-test-and-publish-container.yml --branch main --limit 5
-gh run list --workflow deploy-container-to-dev.yml --branch main --limit 5
+gh run list --workflow deploy-container.yml --branch main --limit 5
 gh run view '<dev-deployment-run-id>'
 ```
 
@@ -498,7 +506,7 @@ gh workflow run create-azure-resources.yml --ref main -f environment=dev -f oper
 # Or publish from an already successful dev apply for the current main commit:
 gh workflow run build-test-and-publish-container.yml --ref main -f infrastructure_run_id='<successful-dev-apply-run-id>'
 # Or deploy an existing successful build, without rebuilding:
-gh workflow run deploy-container-to-dev.yml --ref main -f build_run_id='<successful-build-run-id>'
+gh workflow run deploy-container.yml --ref main -f environment=dev -f source_run_id='<successful-build-run-id>'
 ```
 
 Manual dev infrastructure apply and successful publishing still start the
@@ -519,11 +527,11 @@ Once dev succeeds and the **test infrastructure and GitHub Environment are
 configured**, select that successful **dev deployment** run's ID:
 
 ```powershell
-gh workflow run deploy-tested-container-to-test-or-prod.yml --ref main -f environment=test -f source_run_id='<successful-dev-deployment-run-id>'
-gh run list --workflow deploy-tested-container-to-test-or-prod.yml --branch main --limit 5
+gh workflow run deploy-container.yml --ref main -f environment=test -f source_run_id='<successful-dev-deployment-run-id>'
+gh run list --workflow deploy-container.yml --branch main --limit 5
 ```
 
-[Deploy Tested Container to Test or Prod](.github/workflows/deploy-tested-container-to-test-or-prod.yml) verifies the source run's repository,
+[Deploy Container](.github/workflows/deploy-container.yml) verifies the source run's repository,
 workflow, branch/event, successful result, and deployment record. It imports
 the exact digest from dev ACR into test ACR, verifies/locks it without rebuilding,
 and deploys with **test's** endpoint/model settings and permissions. Candidate
@@ -541,7 +549,7 @@ record the results and obtain release approval before starting prod promotion.
 Use the successful **test deployment run ID**, not the build or dev run ID:
 
 ```powershell
-gh workflow run deploy-tested-container-to-test-or-prod.yml --ref main -f environment=prod -f source_run_id='<successful-test-promotion-run-id>'
+gh workflow run deploy-container.yml --ref main -f environment=prod -f source_run_id='<successful-test-promotion-run-id>'
 ```
 
 The prod job requires `DEPLOYMENTS_ENABLED=true` and
@@ -752,17 +760,17 @@ selected Bicep parameter file; otherwise resource-name parameters are preserved.
    An optional manual `plan` can preview an existing group's changes.
    Run **Create or Update Azure Resources** on main with `dev`/`apply`.
    A successful apply starts **Build, Test, and Publish Container**, which
-   starts **Deploy Container to Dev** only after successful image checks.
+   starts **Deploy Container** targeting dev only after successful image checks.
    Approval happens before protected jobs, not between their what-if and apply.
 2. Review all jobs and artifacts. A failed
    candidate remains recorded but is never eligible for promotion. Existing
    endpoint selection is preserved until candidate tests pass; failed endpoint
    smoke restores the prior selection when one exists.
-3. Provision test with a manual `test`/`apply`. Run **Deploy Tested Container to Test or Prod**,
+3. Provision test with a manual `test`/`apply`. Run **Deploy Container**,
    selecting `test` and the successful dev deployment run's numeric ID.
    No arbitrary image input is accepted.
 4. After test qualification and production commissioning, provision prod and
-   run **Deploy Tested Container to Test or Prod** with the successful test deployment run's ID. The adapter
+   run **Deploy Container** selecting `prod` with the successful test deployment run's ID. The adapter
    enforces dev -> test -> prod and verifies the source workflow, main branch,
    event, repository, successful conclusion, and deployment record.
 5. To roll back, run **Restore Previous Agent Version** with the environment and an earlier successful
