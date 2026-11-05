@@ -1,3 +1,8 @@
+# Purpose: Check Python code, dependency locks, infrastructure syntax, and a
+# locally built container before cloud changes. Runs on pull requests and
+# reusable calls from create-azure-resources.yml.
+# Does not publish images, change Azure resources, or call a model.
+
 name: Build and Test Container
 
 on:

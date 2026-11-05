@@ -1,3 +1,8 @@
+# Purpose: Validate, preview, and optionally apply Azure resources and the model.
+# Runs on main pushes (dev/apply), manual plan/apply, or reusable calls.
+# Passes offline checks first and publishes environment configuration on apply.
+# Does not publish application images or deploy Foundry agent versions.
+
 name: Create or Update Azure Resources
 run-name: ${{ inputs.operation == 'plan' && 'Plan' || 'Apply' }} Azure Resources for ${{ inputs.environment || 'dev' }}
 
