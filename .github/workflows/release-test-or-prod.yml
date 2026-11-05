@@ -1,4 +1,4 @@
-name: Deploy Tested Image to Test or Prod
+name: Release Tested Image to Test or Prod
 
 on:
   workflow_dispatch:
@@ -17,9 +17,9 @@ permissions:
 
 jobs:
   promote:
-    name: Copy the Tested Image and Deploy the Target Agent
+    name: Copy the Tested Image and Release the Target Agent
     if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/deploy.yml
+    uses: ./.github/workflows/release-agent.yml
     permissions:
       contents: read
       actions: read

@@ -261,8 +261,8 @@ tools in [tools/catalog.py](tools/catalog.py). Add regression tests, then test
 the change through the server and chat client.
 
 Use a short-lived `feature/<description>` or `fix/<description>` branch and
-open a pull request into `main`. After review and merge, **Build Image and
-Deploy to Dev** builds the image and deploys dev. Test and prod use **Deploy
+open a pull request into `main`. After review and merge, **Build and Release
+to Dev** builds the image and deploys dev. Test and prod use **Release
 Tested Image to Test or Prod** with the same image, not new builds.
 Protect `main` with required checks and block direct/force pushes; GitHub
 Environment approvals govern cloud deployment rather than environment branches.

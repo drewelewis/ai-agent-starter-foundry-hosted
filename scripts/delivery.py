@@ -421,7 +421,10 @@ def fetch_record(run_id: str, environment: str, output: Path) -> None:
         raise ValueError("Invalid source workflow run ID")
     repo = required("GITHUB_REPOSITORY")
     run = json.loads(command("gh", "api", f"repos/{repo}/actions/runs/{run_id}"))
-    expected_workflow = ".github/workflows/release.yml" if environment == "dev" else ".github/workflows/promote.yml"
+    expected_workflow = (
+        ".github/workflows/release-dev.yml" if environment == "dev"
+        else ".github/workflows/release-test-or-prod.yml"
+    )
     if (run["conclusion"] != "success" or run["head_branch"] != "main"
             or run["event"] not in ("push", "workflow_dispatch") or run["path"] != expected_workflow
             or run["repository"]["full_name"] != repo):

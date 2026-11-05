@@ -424,7 +424,7 @@ def test_failed_response_is_not_a_success():
 def test_source_workflow_provenance_is_verified_before_download(monkeypatch, deployed, tmp_path):
     monkeypatch.setattr(delivery, "command", Mock(return_value=json.dumps({
         "conclusion": "success", "head_branch": "feature", "event": "pull_request",
-        "path": ".github/workflows/release.yml", "repository": {"full_name": "example/math-tutor"},
+        "path": ".github/workflows/release-dev.yml", "repository": {"full_name": "example/math-tutor"},
     })))
     with pytest.raises(ValueError, match="approved successful"):
         delivery.fetch_record("40", "dev", tmp_path / "deployment.json")
@@ -434,7 +434,7 @@ def test_source_workflow_provenance_is_verified_before_download(monkeypatch, dep
 def test_source_record_matches_github_commit_and_run(monkeypatch, deployed, tmp_path):
     source = {
         "conclusion": "success", "head_branch": "main", "head_sha": deployed["commit"],
-        "event": "push", "path": ".github/workflows/release.yml",
+        "event": "push", "path": ".github/workflows/release-dev.yml",
         "repository": {"full_name": "example/math-tutor"},
     }
 
@@ -449,6 +449,38 @@ def test_source_record_matches_github_commit_and_run(monkeypatch, deployed, tmp_
     source["head_sha"] = "c" * 40
     with pytest.raises(ValueError, match="source build commit"):
         delivery.fetch_record("40", "dev", tmp_path / "deployment.json")
+
+
+@pytest.mark.parametrize(("environment", "workflow"), [
+    ("dev", "release-dev.yml"),
+    ("test", "release-test-or-prod.yml"),
+    ("prod", "release-test-or-prod.yml"),
+])
+def test_source_provenance_accepts_only_the_renamed_release_workflow(
+    monkeypatch, deployed, tmp_path, environment, workflow,
+):
+    record = {**deployed, "environment": environment}
+    source = {
+        "conclusion": "success", "head_branch": "main", "head_sha": record["commit"],
+        "event": "workflow_dispatch", "path": f".github/workflows/{workflow}",
+        "repository": {"full_name": "example/math-tutor"},
+    }
+
+    def command(*args):
+        if args[:2] == ("gh", "api"):
+            return json.dumps(source)
+        (tmp_path / "deployment.json").write_text(json.dumps(record))
+        return ""
+
+    execute = Mock(side_effect=command)
+    monkeypatch.setattr(delivery, "command", execute)
+    delivery.fetch_record("40", environment, tmp_path / "deployment.json")
+    assert execute.call_count == 2
+    execute.reset_mock()
+    source["path"] = ".github/workflows/build.yml"
+    with pytest.raises(ValueError, match="approved successful"):
+        delivery.fetch_record("40", environment, tmp_path / "deployment.json")
+    assert execute.call_count == 1
 
 
 def test_rollback_rejects_configuration_drift(deployed, orchestration, tmp_path):
@@ -705,35 +737,35 @@ def test_workflow_safety_contracts():
                 assert "${{ inputs." not in step.get("run", "")
             if job.get("permissions", {}).get("id-token") == "write":
                 assert "environment" in job or "uses" in job
-    promote = (ROOT / ".github/workflows/promote.yml").read_text()
+    promote = (ROOT / ".github/workflows/release-test-or-prod.yml").read_text()
     assert "docker/build-push-action" not in promote
-    reusable = (ROOT / ".github/workflows/deploy.yml").read_text()
+    reusable = (ROOT / ".github/workflows/release-agent.yml").read_text()
     assert "cancel-in-progress: false" in reusable
     assert "PRODUCTION_DEPLOYMENTS_ENABLED" in reusable
     assert "azure/login@" in reusable
 
 
 def test_release_wires_infrastructure_before_build_and_deployment():
-    release = yaml.load((ROOT / ".github/workflows/release.yml").read_text(), Loader=yaml.BaseLoader)
+    release = yaml.load((ROOT / ".github/workflows/release-dev.yml").read_text(), Loader=yaml.BaseLoader)
     jobs = release["jobs"]
     assert jobs["infrastructure-dev"]["needs"] == "checks"
-    assert jobs["infrastructure-dev"]["uses"] == "./.github/workflows/infrastructure.yml"
+    assert jobs["infrastructure-dev"]["uses"] == "./.github/workflows/create-azure-resources.yml"
     assert jobs["infrastructure-dev"]["with"] == {"environment": "dev", "operation": "apply"}
     assert jobs["build"]["needs"] == "infrastructure-dev"
     assert jobs["deploy-dev"]["needs"] == "build"
     assert any(step.get("with", {}).get("name") == "infrastructure-dev" for step in jobs["build"]["steps"])
     assert any("--configure-from infrastructure-input/infrastructure.json" in step.get("run", "")
                for step in jobs["build"]["steps"])
-    deploy = yaml.load((ROOT / ".github/workflows/deploy.yml").read_text(), Loader=yaml.BaseLoader)
+    deploy = yaml.load((ROOT / ".github/workflows/release-agent.yml").read_text(), Loader=yaml.BaseLoader)
     configure = [step for step in deploy["jobs"]["deploy"]["steps"]
                  if "--configure-from" in step.get("run", "")]
     assert len(configure) == 1
     assert configure[0]["if"] == "inputs.target_environment == 'dev'"
-    infra = yaml.load((ROOT / ".github/workflows/infrastructure.yml").read_text(), Loader=yaml.BaseLoader)
+    infra = yaml.load((ROOT / ".github/workflows/create-azure-resources.yml").read_text(), Loader=yaml.BaseLoader)
     assert "workflow_call" in infra["on"]
     assert infra["jobs"]["infrastructure"]["env"]["PROVISION_MODEL"] == "${{ vars.PROVISION_MODEL || 'true' }}"
-    assert "infra/azd/main.bicep" in (ROOT / ".github/workflows/ci.yml").read_text()
-    rollback = yaml.load((ROOT / ".github/workflows/rollback.yml").read_text(), Loader=yaml.BaseLoader)
+    assert "infra/azd/main.bicep" in (ROOT / ".github/workflows/build.yml").read_text()
+    rollback = yaml.load((ROOT / ".github/workflows/restore-agent-version.yml").read_text(), Loader=yaml.BaseLoader)
     restore = [step for step in rollback["jobs"]["rollback"]["steps"]
                if "--configure-from" in step.get("run", "")]
     assert len(restore) == 1
@@ -762,23 +794,27 @@ def test_runtime_image_uses_pinned_base_and_explicit_application_copies():
     assert "requirements-dev.lock.txt" in ignored
 
 
-def test_workflow_names_describe_their_actions_without_changing_provenance_paths():
+def test_workflow_names_and_filenames_describe_their_actions():
     names = {
-        "ci.yml": "Check Code and Container",
-        "infrastructure.yml": "Create or Update Azure Resources",
-        "release.yml": "Build Image and Deploy to Dev",
-        "deploy.yml": "Deploy and Verify Foundry Agent (Reusable)",
-        "promote.yml": "Deploy Tested Image to Test or Prod",
-        "rollback.yml": "Restore Previous Agent Version",
+        "build.yml": "Build and Test",
+        "create-azure-resources.yml": "Create or Update Azure Resources",
+        "release-dev.yml": "Build and Release to Dev",
+        "release-agent.yml": "Release and Verify Foundry Agent (Reusable)",
+        "release-test-or-prod.yml": "Release Tested Image to Test or Prod",
+        "restore-agent-version.yml": "Restore Previous Agent Version",
     }
+    assert {path.name for path in (ROOT / ".github/workflows").glob("*.yml")} == set(names)
     for filename, name in names.items():
         workflow = yaml.load((ROOT / ".github/workflows" / filename).read_text(), Loader=yaml.BaseLoader)
         assert workflow["name"] == name
         assert all(job.get("name") for job in workflow["jobs"].values())
-    for filename in ("ci.yml", "release.yml"):
+        for job in workflow["jobs"].values():
+            if job.get("uses", "").startswith("./"):
+                assert (ROOT / job["uses"][2:]).is_file()
+    for filename in ("build.yml", "release-dev.yml"):
         text = (ROOT / ".github/workflows" / filename).read_text()
         assert "python -m scripts.container_smoke --image " in text
-    release = (ROOT / ".github/workflows/release.yml").read_text()
+    release = (ROOT / ".github/workflows/release-dev.yml").read_text()
     assert "provenance: false" in release
     assert "sbom: false" in release
 
@@ -815,7 +851,7 @@ def test_dependency_locks_have_exact_versions_and_hashes():
 
 
 def test_ci_requires_committed_hash_locks_and_reviewed_base_updates():
-    ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    ci = (ROOT / ".github/workflows/build.yml").read_text()
     assert "pip install --require-hashes -r requirements-dev.lock.txt" in ci
     assert "git ls-files --error-unmatch requirements.lock.txt requirements-dev.lock.txt" in ci
     assert "git diff --exit-code -- requirements.lock.txt requirements-dev.lock.txt" in ci

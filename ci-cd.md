@@ -246,17 +246,18 @@ These workflows are implemented:
 
 | Workflow | Trigger | Responsibility |
 |---|---|---|
-| [Check Code and Container](.github/workflows/ci.yml) | Pull requests, main pushes, reusable call | Verify dependency locks, Python 3.11 tests, actionlint, Bicep compilation, image contents/non-root user and startup; no Azure credentials on PRs |
-| [Create or Update Azure Resources](.github/workflows/infrastructure.yml) | Reusable call; manual `plan` or `apply` | Validate/what-if and reconcile resources/model; publish configuration outputs |
-| [Build Image and Deploy to Dev](.github/workflows/release.yml) | Main push or manual main run | Run checks, reconcile dev infrastructure, build/publish/scan one image, create manifest, deploy/test dev |
-| [Deploy Tested Image to Test or Prod](.github/workflows/promote.yml) | Manual source run ID | Verify source-run provenance, copy by digest, deploy test or prod |
-| [Deploy and Verify Foundry Agent (Reusable)](.github/workflows/deploy.yml) | Reusable workflow | Environment gates, runtime model role, candidate smoke, endpoint selection, evidence |
-| [Restore Previous Agent Version](.github/workflows/rollback.yml) | Manual known-good run ID | Verify source-run provenance and restore a recorded version |
+| [Build and Test](.github/workflows/build.yml) | Pull requests, main pushes, reusable call | Verify dependency locks, Python 3.11 tests, actionlint, Bicep compilation, image contents/non-root user and startup; no Azure credentials on PRs |
+| [Create or Update Azure Resources](.github/workflows/create-azure-resources.yml) | Reusable call; manual `plan` or `apply` | Validate/what-if and reconcile resources/model; publish configuration outputs |
+| [Build and Release to Dev](.github/workflows/release-dev.yml) | Main push or manual main run | Run checks, reconcile dev infrastructure, build/publish/scan one image, create manifest, deploy/test dev |
+| [Release Tested Image to Test or Prod](.github/workflows/release-test-or-prod.yml) | Manual source run ID | Verify source-run provenance, copy by digest, deploy test or prod |
+| [Release and Verify Foundry Agent (Reusable)](.github/workflows/release-agent.yml) | Reusable workflow | Environment gates, runtime model role, candidate smoke, endpoint selection, evidence |
+| [Restore Previous Agent Version](.github/workflows/restore-agent-version.yml) | Manual known-good run ID | Verify source-run provenance and restore a recorded version |
 
-These are the names shown in GitHub Actions. Workflow filenames and internal job
-IDs remain stable so CLI commands, artifact provenance checks, and existing
-workflow references continue to work. Review required status checks in branch
-protection after adopting the clearer job display names.
+Both display names and filenames describe their purpose. Reusable calls, CLI
+examples, and source-run provenance checks use these filenames. Internal job
+IDs remain stable. Review required status checks in branch protection after
+adopting the clearer job display names. The renamed workflows appear on the
+default branch after this feature PR is merged; old runs retain their names.
 
 Share deployment logic through a reusable workflow so dev/test/prod execute
 the same steps. Dev infrastructure, image build, and Foundry deployment are
@@ -431,7 +432,7 @@ git push -u origin feature/your-feature
 gh pr create --base main --title 'Describe your feature' --body 'Describe the change and test evidence.'
 ```
 
-[Check Code and Container](.github/workflows/ci.yml) runs offline Python tests, `pip check`,
+[Build and Test](.github/workflows/build.yml) runs offline Python tests, `pip check`,
 actionlint, resource-group and azd Bicep/environment-parameter compilation, and Linux
 container startup/readiness/malformed-input checks. It does not publish to ACR
 or make live model calls. Azure credentials are not supplied to PR jobs.
@@ -440,7 +441,7 @@ do not enforce review or merge policy.
 
 ### C. Merge and deploy dev
 
-Merge the reviewed PR after checks succeed. [Build Image and Deploy to Dev](.github/workflows/release.yml)
+Merge the reviewed PR after checks succeed. [Build and Release to Dev](.github/workflows/release-dev.yml)
 automatically runs on a main push; it can also be started manually on main.
 It:
 
@@ -463,14 +464,14 @@ It:
 Find the run and review all jobs, including **deploy-dev**:
 
 ```powershell
-gh run list --workflow release.yml --branch main --limit 5
+gh run list --workflow release-dev.yml --branch main --limit 5
 gh run view '<release-run-id>'
 ```
 
 For an explicitly requested manual release:
 
 ```powershell
-gh workflow run release.yml --ref main
+gh workflow run release-dev.yml --ref main
 ```
 
 Do not promote a build-only or failed run. Inspect `release` and
@@ -488,11 +489,11 @@ Once dev succeeds and the **test infrastructure and GitHub Environment are
 configured**, select that successful Release run's ID:
 
 ```powershell
-gh workflow run promote.yml --ref main -f environment=test -f source_run_id='<successful-release-run-id>'
-gh run list --workflow promote.yml --branch main --limit 5
+gh workflow run release-test-or-prod.yml --ref main -f environment=test -f source_run_id='<successful-release-run-id>'
+gh run list --workflow release-test-or-prod.yml --branch main --limit 5
 ```
 
-[Deploy Tested Image to Test or Prod](.github/workflows/promote.yml) verifies the source run's repository,
+[Release Tested Image to Test or Prod](.github/workflows/release-test-or-prod.yml) verifies the source run's repository,
 workflow, branch/event, successful result, and deployment record. It imports
 the exact digest from dev ACR into test ACR, verifies/locks it without rebuilding,
 and deploys with **test's** endpoint/model settings and permissions. Candidate
@@ -510,7 +511,7 @@ record the results and obtain release approval before starting prod promotion.
 Use the successful **Promote-to-test run ID**, not the original Release run ID:
 
 ```powershell
-gh workflow run promote.yml --ref main -f environment=prod -f source_run_id='<successful-test-promotion-run-id>'
+gh workflow run release-test-or-prod.yml --ref main -f environment=prod -f source_run_id='<successful-test-promotion-run-id>'
 ```
 
 The prod job requires `DEPLOYMENTS_ENABLED=true` and
@@ -535,10 +536,10 @@ For a bad rollout, select an earlier successful deployment run for the **same
 target environment**:
 
 ```powershell
-gh workflow run rollback.yml --ref main -f environment=prod -f known_good_run_id='<earlier-successful-prod-run-id>'
+gh workflow run restore-agent-version.yml --ref main -f environment=prod -f known_good_run_id='<earlier-successful-prod-run-id>'
 ```
 
-[Restore Previous Agent Version](.github/workflows/rollback.yml) verifies the recorded version,
+[Restore Previous Agent Version](.github/workflows/restore-agent-version.yml) verifies the recorded version,
 restores its endpoint selection, runs smoke, and writes rollback evidence.
 It does not rebuild or revert model/infrastructure changes. Existing sessions
 can remain attached to their original versions. Artifacts and old versions
@@ -717,16 +718,16 @@ selected Bicep parameter file; otherwise resource-name parameters are preserved.
 
 1. Complete dev OIDC/role/environment bootstrap and review IaC/model settings.
    An optional manual `plan` can preview an existing group's changes.
-   Run **Build Image and Deploy to Dev** on main; it applies dev infrastructure before building.
+   Run **Build and Release to Dev** on main; it applies dev infrastructure before building.
    Approval happens before protected jobs, not between their what-if and apply.
 2. Review all jobs and artifacts. A failed
    candidate remains recorded but is never eligible for promotion. Existing
    endpoint selection is preserved until candidate tests pass; failed endpoint
    smoke restores the prior selection when one exists.
-3. Provision test the same way. Run **Deploy Tested Image to Test or Prod**, selecting `test` and the
+3. Provision test the same way. Run **Release Tested Image to Test or Prod**, selecting `test` and the
    successful Release run's numeric ID. No arbitrary image input is accepted.
 4. After test qualification and production commissioning, provision prod and
-   run **Deploy Tested Image to Test or Prod** with the successful test deployment run's ID. The adapter
+   run **Release Tested Image to Test or Prod** with the successful test deployment run's ID. The adapter
    enforces dev -> test -> prod and verifies the source workflow, main branch,
    event, repository, successful conclusion, and deployment record.
 5. To roll back, run **Restore Previous Agent Version** with the environment and an earlier successful

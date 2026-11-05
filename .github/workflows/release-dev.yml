@@ -1,4 +1,4 @@
-name: Build Image and Deploy to Dev
+name: Build and Release to Dev
 
 on:
   push:
@@ -14,13 +14,13 @@ concurrency:
 
 jobs:
   checks:
-    name: Check Code and Container
+    name: Build and Test
     if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/build.yml
   infrastructure-dev:
     name: Create or Update Dev Azure Resources
     needs: checks
-    uses: ./.github/workflows/infrastructure.yml
+    uses: ./.github/workflows/create-azure-resources.yml
     permissions:
       contents: read
       id-token: write
@@ -135,9 +135,9 @@ jobs:
             docker rm -f math-tutor-release
           fi
   deploy-dev:
-    name: Deploy and Verify the Dev Agent
+    name: Release and Verify the Dev Agent
     needs: build
-    uses: ./.github/workflows/deploy.yml
+    uses: ./.github/workflows/release-agent.yml
     permissions:
       contents: read
       actions: read
