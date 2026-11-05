@@ -1,9 +1,7 @@
-name: Build and Test
+name: Build and Test Container
 
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_call:
 
 permissions:
@@ -63,7 +61,7 @@ jobs:
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
   container:
-    name: Build and Check the Container Without Model Calls
+    name: Build and Test Container Without Model Calls
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:

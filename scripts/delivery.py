@@ -22,6 +22,10 @@ COMMIT = re.compile(r"[0-9a-f]{40}")
 NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 TAG = re.compile(r"sha-[0-9a-f]{40}-run-[0-9]+-[0-9]+")
 MODEL_USER_ROLE = "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
+BUILD_WORKFLOW = ".github/workflows/build-test-and-publish-container.yml"
+DEV_DEPLOY_WORKFLOW = ".github/workflows/deploy-container-to-dev.yml"
+PROMOTE_WORKFLOW = ".github/workflows/deploy-tested-container-to-test-or-prod.yml"
+INFRASTRUCTURE_WORKFLOW = ".github/workflows/create-azure-resources.yml"
 
 
 def required(name: str) -> str:
@@ -416,19 +420,56 @@ def rollback(record: dict, environment: str, output: Path) -> None:
     write_json(output, {**record, "rollback_run_id": required("GITHUB_RUN_ID"), "endpoint_smoke": results})
 
 
-def fetch_record(run_id: str, environment: str, output: Path) -> None:
+def approved_run(run_id: str, workflow: str, events: tuple[str, ...]) -> dict:
     if not run_id.isdigit():
         raise ValueError("Invalid source workflow run ID")
     repo = required("GITHUB_REPOSITORY")
     run = json.loads(command("gh", "api", f"repos/{repo}/actions/runs/{run_id}"))
-    expected_workflow = (
-        ".github/workflows/release-dev.yml" if environment == "dev"
-        else ".github/workflows/release-test-or-prod.yml"
-    )
     if (run["conclusion"] != "success" or run["head_branch"] != "main"
-            or run["event"] not in ("push", "workflow_dispatch") or run["path"] != expected_workflow
+            or run["event"] not in events or run["path"] != workflow
             or run["repository"]["full_name"] != repo):
-        raise ValueError("Source run is not an approved successful deployment workflow")
+        raise ValueError("Source run is not an approved successful workflow")
+    if not isinstance(run.get("head_sha"), str) or not COMMIT.fullmatch(run["head_sha"]):
+        raise ValueError("Source workflow has an invalid commit")
+    return run
+
+
+def fetch_infrastructure(run_id: str, output: Path) -> None:
+    run = approved_run(run_id, INFRASTRUCTURE_WORKFLOW, ("push", "workflow_dispatch"))
+    if run["head_sha"] != required("GITHUB_SHA") or run.get("display_title") != "Apply Azure Resources for dev":
+        raise ValueError("Infrastructure must be a dev apply for the current main commit")
+    command(
+        "gh", "run", "download", run_id, "--repo", required("GITHUB_REPOSITORY"),
+        "--name", "infrastructure-dev", "--dir", str(output),
+    )
+    if not (output / "infrastructure.json").is_file():
+        raise ValueError("Infrastructure run did not publish applied configuration")
+
+
+def verify_build(record: dict, run_id: str, run: dict) -> None:
+    validate_release(record)
+    if record["commit"] != run["head_sha"] or str(record["build_run_id"]) != run_id:
+        raise ValueError("Release does not match the source build commit/run")
+    if not str(record.get("infrastructure_run_id", "")).isdigit():
+        raise ValueError("Release is missing its infrastructure run")
+
+
+def fetch_build(run_id: str, output: Path) -> None:
+    run = approved_run(run_id, BUILD_WORKFLOW, ("workflow_run", "workflow_dispatch"))
+    repo = required("GITHUB_REPOSITORY")
+    command("gh", "run", "download", run_id, "--repo", repo,
+            "--name", "release", "--dir", str(output.parent))
+    record = json.loads(output.read_text(encoding="utf-8"))
+    verify_build(record, run_id, run)
+    command("gh", "run", "download", run_id, "--repo", repo,
+            "--name", "infrastructure-dev", "--dir", "infrastructure-input")
+
+
+def fetch_record(run_id: str, environment: str, output: Path) -> None:
+    workflow = DEV_DEPLOY_WORKFLOW if environment == "dev" else PROMOTE_WORKFLOW
+    events = ("workflow_run", "workflow_dispatch") if environment == "dev" else ("workflow_dispatch",)
+    approved_run(run_id, workflow, events)
+    repo = required("GITHUB_REPOSITORY")
     command("gh", "run", "download", run_id, "--repo", repo,
             "--name", f"deployment-{environment}", "--dir", str(output.parent))
     record = json.loads(output.read_text(encoding="utf-8"))
@@ -436,13 +477,16 @@ def fetch_record(run_id: str, environment: str, output: Path) -> None:
     if (str(record.get("workflow_run_id")) != run_id or record.get("environment") != environment
             or record.get("status") != "passed"):
         raise ValueError("Downloaded deployment provenance does not match source run")
-    if environment == "dev" and (record["commit"] != run["head_sha"] or str(record["build_run_id"]) != run_id):
-        raise ValueError("Dev release does not match the source build commit/run")
+    build_id = str(record["build_run_id"])
+    build_run = approved_run(build_id, BUILD_WORKFLOW, ("workflow_run", "workflow_dispatch"))
+    verify_build(record, build_id, build_run)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("manifest", "deploy", "promote", "rollback", "fetch"))
+    parser.add_argument(
+        "action", choices=("manifest", "deploy", "promote", "rollback", "fetch", "fetch-build", "fetch-infrastructure"),
+    )
     parser.add_argument("--environment", choices=ENVIRONMENTS, default="dev")
     parser.add_argument("--input", type=Path)
     parser.add_argument("--output", type=Path, default=Path("release-output/deployment.json"))
@@ -451,13 +495,21 @@ def main() -> None:
     if args.action == "fetch":
         fetch_record(args.run_id or "", args.environment, args.output)
         return
+    if args.action == "fetch-build":
+        fetch_build(args.run_id or "", args.output)
+        return
+    if args.action == "fetch-infrastructure":
+        fetch_infrastructure(args.run_id or "", args.output)
+        return
     if args.action == "manifest":
-        registry()
+        acr = registry()
         release = {
             "schema_version": 1, "repository": "math-tutor", "platform": "linux/amd64",
             "digest": required("IMAGE_DIGEST"), "commit": required("GITHUB_SHA"),
             "build_run_id": required("GITHUB_RUN_ID"), "github_repository": required("GITHUB_REPOSITORY"),
             "tag": required("IMAGE_TAG"),
+            "infrastructure_run_id": required("INFRASTRUCTURE_RUN_ID"),
+            "registry_resource_id": acr["id"],
             "evidence": {
                 "workflow_run_url": f"https://github.com/{required('GITHUB_REPOSITORY')}/actions/runs/{required('GITHUB_RUN_ID')}",
                 "scan_artifact": "release/scan.json",
@@ -476,6 +528,8 @@ def main() -> None:
     if args.action == "deploy":
         if args.environment != "dev":
             raise ValueError("Direct deployment is restricted to dev; use promotion")
+        if record.get("registry_resource_id", "").lower() != required("AZURE_CONTAINER_REGISTRY_ID").lower():
+            raise ValueError("Build registry does not match the dev infrastructure configuration")
         deploy(record, args.environment, args.output)
     elif args.action == "promote":
         promote(record, args.environment, args.output)

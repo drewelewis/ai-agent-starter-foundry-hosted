@@ -1,0 +1,33 @@
+name: Deploy Container to Dev
+
+on:
+  workflow_run:
+    workflows: ['Build, Test, and Publish Container']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful Build, Test, and Publish Container run
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-dev:
+    name: Deploy Published Container and Verify Dev Agent
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_sha == github.sha))
+    uses: ./.github/workflows/deploy-and-verify-foundry-agent.yml
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    with:
+      target_environment: dev
+      source_run_id: ${{ github.event.workflow_run.id || inputs.build_run_id }}
