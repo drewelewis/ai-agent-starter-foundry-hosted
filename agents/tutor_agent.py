@@ -6,6 +6,7 @@ from agent_framework import Agent, tool
 from agent_framework.openai import OpenAIChatClient
 from azure.identity import DefaultAzureCredential
 
+from agents.diagnostics import LocalDiagnosticsMiddleware, local_diagnostics_enabled
 from tools.catalog import MATH_TOOLS
 
 
@@ -17,11 +18,15 @@ MODEL_ENVIRONMENT_VARIABLES = (
 )
 
 AGENT_NAME = "MathTutorAgent"
-AGENT_DESCRIPTION = "A patient math tutor for arithmetic, geometry, and real-valued algebra."
+AGENT_DESCRIPTION = (
+    "A patient math tutor for arithmetic, geometry, real-valued algebra, "
+    "and polynomial derivatives."
+)
 AGENT_INSTRUCTIONS = """
 You are a patient math tutor. Help the student understand, not just get an answer.
 
-- Use the available calculation tools for arithmetic, geometry, and equations.
+- Use the available calculation tools for arithmetic, geometry, equations,
+  and polynomial derivatives.
 - Explain the relevant formula, substitute the student's values, and show the result.
 - Ask for missing measurements or ambiguous equation coefficients; never invent them.
 - Geometry dimensions must be positive. Ask students to express all measurements
@@ -33,6 +38,14 @@ You are a patient math tutor. Help the student understand, not just get an answe
 - Rewrite equations into a*x + b = 0 or a*x^2 + b*x + c = 0 before calling tools.
 - Equation tools solve over the real numbers only. Explain no-solution,
   no-real-solution, and infinitely-many-solution results accurately.
+- For polynomial derivatives, use differentiate_polynomial with finite real
+  coefficients in descending powers of x, including zeros for missing powers.
+  For example, "3x squared + 1" means 3*x^2 + 1: pass [3, 0, 1] to get 6*x.
+  Explain the power rule d(a*x^n)/dx = a*n*x^(n-1); constants differentiate to zero.
+- This calculus tool supports only polynomials in x with nonnegative integer
+  powers. Do not silently drop unsupported terms or approximate a different
+  expression. Explain the limitation for functions such as sin(x), negative or
+  fractional powers, other variables, integrals, and limits; clarify ambiguity.
 - Explain calculation errors and ask for corrected inputs rather than guessing.
 - Keep intermediate precision; round only the final answer when appropriate.
 - Offer a short practice question or a hint when it helps the student learn.
@@ -55,6 +68,7 @@ def model_configuration() -> tuple[str, str]:
 
 async def create_tutor_agent() -> Agent:
     """Create the tutor with automatic tool invocation and client-side history."""
+    diagnostics_enabled = local_diagnostics_enabled()
     endpoint, deployment = model_configuration()
     client = OpenAIChatClient(
         azure_endpoint=endpoint,
@@ -68,4 +82,5 @@ async def create_tutor_agent() -> Agent:
         instructions=AGENT_INSTRUCTIONS,
         tools=[tool(function, approval_mode="never_require") for function in MATH_TOOLS],
         default_options={"store": False},
+        middleware=[LocalDiagnosticsMiddleware()] if diagnostics_enabled else [],
     )

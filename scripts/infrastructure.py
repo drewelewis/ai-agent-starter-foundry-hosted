@@ -67,11 +67,10 @@ def main() -> None:
     if provision_model == "true":
         model = {
             "deployModel": True,
-            "modelDeploymentName": os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME") or "math-tutor",
             "modelName": os.environ.get("MODEL_NAME") or "gpt-5-mini",
             "modelVersion": os.environ.get("MODEL_VERSION") or "2025-08-07",
             "modelSku": os.environ.get("MODEL_SKU") or "GlobalStandard",
-            "modelCapacity": int(os.environ.get("MODEL_CAPACITY") or "1"),
+            "modelCapacity": int(os.environ.get("MODEL_CAPACITY") or "100"),
         }
         if model["modelCapacity"] < 1:
             raise ValueError("MODEL_CAPACITY must be positive")

@@ -9,7 +9,7 @@ param location string
 @description('Object ID of the developer receiving model-invocation permission.')
 param principalId string
 
-param modelDeploymentName string = 'math-tutor'
+@description('Model catalog name; also used as the deployment name.')
 param modelName string = 'gpt-5-mini'
 param modelVersion string = '2025-08-07'
 
@@ -21,7 +21,8 @@ param modelVersion string = '2025-08-07'
 param modelSku string = 'GlobalStandard'
 
 @minValue(1)
-param modelCapacity int = 1
+@description('Model-specific quota units. For the selected GPT-5-mini GlobalStandard deployment, 100 units provides 100 RPM and 100,000 TPM; verify quota and model rate ratios before changing.')
+param modelCapacity int = 100
 
 var tags = {
   application: 'math-tutor'
@@ -43,7 +44,6 @@ module foundry '../main.bicep' = {
     deployContainerRegistry: true
     deployModel: true
     principalId: principalId
-    modelDeploymentName: modelDeploymentName
     modelName: modelName
     modelVersion: modelVersion
     modelSku: modelSku

@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 
-from tools import algebra_tool, arithmetic_tool, geometry_tool
+from tools import algebra_tool, arithmetic_tool, calculus_tool, geometry_tool
 
 
 MATH_TOOLS: tuple[Callable[..., str], ...] = (
@@ -29,4 +29,5 @@ MATH_TOOLS: tuple[Callable[..., str], ...] = (
     geometry_tool.coordinate_distance,
     algebra_tool.solve_linear_equation,
     algebra_tool.solve_quadratic_equation,
+    calculus_tool.differentiate_polynomial,
 )
