@@ -1,6 +1,6 @@
 # Math tutor Foundry hosted agent (Responses protocol).
 
-FROM python:3.11-slim@sha256:064f01707f2fc8b06bae86bb43875266c6e41bac7994e77ec5dc623c4a4d0545
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 # Set working directory
 WORKDIR /app
